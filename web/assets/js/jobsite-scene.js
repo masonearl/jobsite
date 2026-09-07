@@ -92,8 +92,8 @@ export class JobsiteScene {
         const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
     }
     crewLabel(parent, role, height) {
-        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.label(role.toUpperCase() + ' / L1', 384), depthTest: true }));
-        sprite.position.y = height; sprite.scale.set(2.2, .37, 1); parent.add(sprite);
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.label(Sim.crewTag(this.state, role), role === 'operator' ? 256 : 96), depthTest: true }));
+        sprite.position.y = height; sprite.scale.set(role === 'operator' ? 2 : .75, .4, 1); parent.add(sprite);
         return { sprite, role, level: 1 };
     }
     paintWear() {
@@ -152,6 +152,7 @@ export class JobsiteScene {
         const token = ++this.changeToken;
         this.disposeRoot();
         this.pendingPipe = null; this.utilityRef = null; this.utilityCount = -1; this.skyTexture = null; this.environment = null;
+        this.planLines = null; this.planRef = null; this.planRevision = -1;
         this.root = new THREE.Group(); this.scene.add(this.root);
         this.scene.background = new THREE.Color('#afb8ae'); this.scene.environment = null;
         this.scene.fog = new THREE.Fog(s.region.biome === 'forest' ? '#9baba4' : s.region.biome === 'desert' ? '#ddc9a6' : '#b8bdb0', 50, 170);
@@ -393,7 +394,7 @@ export class JobsiteScene {
     updateCrew(s, dt) {
         for (const label of this.crewLabels) {
             const level = Sim.crewLevel(s, label.role);
-            if (label.level !== level) { label.sprite.material.map.dispose(); label.sprite.material.map = this.label(label.role.toUpperCase() + ' / L' + level, 384); label.level = level; }
+            if (label.level !== level) { label.sprite.material.map.dispose(); label.sprite.material.map = this.label(Sim.crewTag(s, label.role), label.role === 'operator' ? 256 : 96); label.level = level; }
         }
         const count = s.utilities.pipes.length + ':' + s.utilities.joints.length;
         if (this.utilityRef !== s.utilities || this.utilityCount !== count) {
@@ -458,8 +459,33 @@ export class JobsiteScene {
         m.rotation.z = Math.atan2(b.y - a.y, b.x - a.x);
         m.scale.x = a.distanceTo(b);
     }
+    updatePlan(s) {
+        if (this.planLines) this.planLines.visible = s.planVisible;
+        if (!s.planVisible) return;
+        const revision = s.terrain.revision + ':' + s.utilities.pipes.length;
+        if (this.planRef === s.plan && this.planRevision === revision && this.planLines) return;
+        this.planRef = s.plan; this.planRevision = revision;
+        const points = [], colors = [], c = Math.cos(s.plan.heading), sn = Math.sin(s.plan.heading);
+        for (const section of Sim.planSections(s)) {
+            const color = new THREE.Color(section.installed ? '#7ae0ac' : section.ready ? '#ffe29a' : '#9edaf1');
+            const corners = [[-1,-s.plan.width/2],[1,-s.plan.width/2],[1,s.plan.width/2],[-1,s.plan.width/2]];
+            for (let i = 0; i < 4; i++) for (const [along, across] of [corners[i], corners[(i + 1) % 4]]) {
+                points.push(v(section.x + along * c + across * sn, .06, section.z - along * sn + across * c));
+                colors.push(color.r, color.g, color.b);
+            }
+        }
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        if (this.planLines) { this.planLines.geometry.dispose(); this.planLines.geometry = geometry; }
+        else {
+            this.planLines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ vertexColors: true, depthTest: false, transparent: true, opacity: .95 }));
+            this.planLines.renderOrder = 8; this.root.add(this.planLines);
+        }
+        this.dirty = true;
+    }
     render(s, dt) {
         if (!this.root || !this.upper) return;
+        this.updatePlan(s);
         this.controls.update();
         if (s.status !== 'playing' && !this.dirty && this.terrainRef === s.terrain) return;
         const started = performance.now();

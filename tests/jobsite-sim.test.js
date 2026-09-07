@@ -320,3 +320,16 @@ test('lunch restores energy, pauses with the shift and preserves construction', 
     Sim.step(s,50);assert.equal(s.crewActivity.elapsed,elapsed);Sim.pause(s);Sim.step(s,10);
     assert.equal(s.crewActivity,null);assert.ok(s.energy>99);assert.equal(s.terrain.volume,volume);assert.equal(s.bucket,2.5);
 });
+
+test('crew labels distinguish roles and show the actual trained level', () => {
+ const s=playing();assert.equal(Sim.crewTag(s,'operator'),'Operator 1');assert.equal(Sim.crewTag(s,'laborer'),'L1');assert.equal(Sim.crewTag(s,'joiner'),'PJ1');assert.equal(Sim.crewTag(s,'foreman'),'F1');
+ s.skills.joiner=100;assert.equal(Sim.crewTag(s,'joiner'),'PJ3');
+});
+test('site plan follows the machine heading, stays within the work area and reports actual ground', () => {
+ const s=playing(0,true);assert.equal(Sim.planSections(s).length,6);assert.equal(Sim.planSections(s)[0].ready,false);
+ Sim.setOperateHeld(s,true);Sim.step(s,20);Sim.setOperateHeld(s,false);assert.equal(Sim.planSections(s)[0].ready,true);
+ const first=Sim.pipeCandidate(s);s.utilities.pipes.push(first);assert.equal(Sim.planSections(s)[0].installed,true);
+ Sim.clearCrew(s);Sim.step(s,5);Sim.turn(s,1);Sim.step(s,.6);Sim.setPlan(s);
+ const sections=Sim.planSections(s);assert.ok(Math.abs(sections[1].z-sections[0].z-2)<1e-8);assert.ok(Math.abs(sections[1].x-sections[0].x)<1e-8);
+ s.machine.z=16;Sim.setPlan(s);assert.equal(s.plan.sections,1);
+});

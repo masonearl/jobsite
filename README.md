@@ -29,10 +29,11 @@ There is no build step, account, API key, backend service, or package install ne
 - **Space:** hold to repeat steady dig/load cycles at 80% bucket capacity. Release in the marked zone for a full single bite and cash bonus. Release stops new cycles; the current animation finishes. The scene or operation button must have keyboard focus.
 - **Back up 2 m:** move one pipe length in reverse while keeping the trench aligned.
 - **Install 2 m pipe:** available after the bed is within the target depth tolerance and the bucket is empty. Install an adjoining section, then **Connect joint**.
+- **Site plan:** show a saved pipe-corridor layout over the actual terrain. Planned, on-grade and installed sections have different colors. **Plan from bucket** aligns a new plan with the current machine heading.
 - **Drag / scroll / pinch:** orbit and zoom the camera. Camera orientation does not change forward or reverse.
 - **Expand game:** fill the browser viewport. **Fullscreen:** use native fullscreen where supported. **Esc:** exit the expanded view.
 - **Clear crew:** park workers outside the equipment zone after pipe work. Workers stop nearby equipment; open cuts and exposed pipe stop a blocked truck. Reposition the loading pad to a clear lane.
-- **Upgrades / Crew:** train spotting or machine operation, take lunch, and review saved crew levels.
+- **Crew & upgrades:** train spotting or machine operation, take lunch, and review saved crew levels.
 - **Throttle:** three distinct 2 m sections on grade unlock Eco, Work and Boost RPM presets with different speeds and fuel use.
 - **P:** pause when the game has keyboard focus. Opening the guide or map also pauses the shift.
 
@@ -44,7 +45,7 @@ Touch controls are available in the scene. In expanded view, open **Upgrades** f
 - Three equipment spreads, three contracts per region, and free digging without a clock.
 - Articulated equipment, a digging/loading cycle, trucks, and a visible pipe crew.
 - Terrain deformation at each bucket location. Cuts and installed pipe remain as you move and carry into the next contract on that site.
-- Trench alignment assistance, two-meter reversing, and pipe joint connection.
+- Trench alignment assistance, two-meter reversing, pipe joint connection and a saved site-plan overlay.
 - Equipment upgrades, foreman/operator/laborer/joiner levels 1–10, training and lunch breaks.
 - Geometry-based excavation volume, density-based mass accounting and truck capacity limits.
 - Equipment/worker interlocks, persistent trench and pipe obstacles, and device saves.
@@ -83,5 +84,7 @@ Performance depends on the GPU, browser and number of placed pipes. Operator not
 Useful contributions include clearer equipment geometry and animations, better trench and material behavior, operator feedback on controls, accessibility, and performance on lower-powered devices. Please open an issue with a concrete example or a focused pull request. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License and assets
+
+Crew overhead tags are `F1` (foreman), `Operator 1`, `L1` (laborer), and `PJ1` (pipe joiner); the number tracks each role's trained level.
 
 Code is [MIT licensed](LICENSE). Three.js and OrbitControls retain their [MIT license](web/assets/vendor/three/LICENSE). Natural Earth map data is public domain. Generated landscape and ground textures are included; their source notes and prompts are in [ASSETS.md](web/assets/jobsite/ASSETS.md).

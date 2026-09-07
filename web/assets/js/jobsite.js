@@ -234,6 +234,11 @@
         $('install-pipe').disabled = !Sim.canTravel(state) || state.bucket > 0 || !!state.advance || !pipeReady || Math.abs(state.targetHeading - state.machine.heading) > .02;
         $('connect-pipe').disabled = !Sim.canTravel(state) || state.bucket > 0 || !!state.advance || !Sim.connectionCandidate(state) || Math.abs(state.targetHeading - state.machine.heading) > .02;
         const bed = Sim.trenchStatus(state);
+        $('plan-panel').hidden = !state.planVisible; $('plan-toggle').setAttribute('aria-pressed', String(state.planVisible)); $('scene-wrap').classList.toggle('is-planning', state.planVisible);
+        text('plan-summary', state.plan.sections * 2 + ' m pipe / ' + state.plan.width.toFixed(2) + ' m wide / ' + state.plan.depth.toFixed(2) + ' m deep');
+        const planned = Sim.planSections(state);
+        text('plan-progress', planned.filter(section => section.installed).length * 2 + ' m pipe installed / ' + planned.filter(section => section.ready && !section.installed).length * 2 + ' m ready');
+        $('plan-origin').disabled = !Sim.canTravel(state);
         text('crew-status', pipeWork ? 'Crew working...' : state.bucket > 0 ? 'Load the bucket to clear the crew' : pipeReady ? 'On grade / ready for pipe' : state.utilities.pipes.length * 2 + ' m pipe / ' + state.utilities.joints.length + (state.utilities.joints.length === 1 ? ' joint' : ' joints'));
         text('trench-size', '2.0 x ' + (1.56 * state.fleet.scale).toFixed(2) + ' m / ' + bed.min.toFixed(2) + '-' + bed.max.toFixed(2) + ' m deep');
         text('material-moved', state.terrain.volume.toFixed(2) + ' m3 / ' + state.terrain.mass.toFixed(2) + ' t removed');
@@ -297,6 +302,8 @@
     $('restart-job').addEventListener('click', () => { clearOperate(); state = Sim.createState(state.level, state.practice, state); lastStatus = ''; hud(); saveJob(); });
     $('throttle').addEventListener('change', e => { Sim.setThrottle(state, e.target.value); hud(); saveJob(); canvas.focus({ preventScroll: true }); });
     $('clear-crew').addEventListener('click', () => { clearOperate(); stopTravel(); Sim.clearCrew(state); hud(); canvas.focus({ preventScroll: true }); });
+    $('plan-toggle').addEventListener('click', () => { if (!sceneReady) return; clearOperate(); stopTravel(); state.planVisible = !state.planVisible; scene.dirty = true; const view = state.planVisible ? 'overhead' : 'site'; scene.setCamera(view); document.querySelectorAll('[data-camera]').forEach(button => button.classList.toggle('selected', button.dataset.camera === view)); hud(); saveJob(); canvas.focus({ preventScroll: true }); });
+    $('plan-origin').addEventListener('click', () => { Sim.setPlan(state); hud(); saveJob(); canvas.focus({ preventScroll: true }); });
     for (const type of ['spotting', 'operation', 'lunch']) $('crew-' + type).addEventListener('click', () => { clearOperate(); stopTravel(); Sim.crewActivity(state, type); hud(); saveJob(); });
     ['bucket', 'dispatch'].forEach(key => $('upgrade-' + key).addEventListener('click', () => { if (Sim.buy(state, key)) tone(250, .18); hud(); }));
     function tone(hz, duration) {

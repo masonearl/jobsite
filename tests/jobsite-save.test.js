@@ -71,3 +71,8 @@ test('a stale tab cannot overwrite newer excavation from another tab', () => {
  Sim.setOperateHeld(a,true);Sim.step(a,2);Save.write(db,a);assert.throws(()=>Save.write(db,b),/another tab/);
  assert.ok(Save.read(db,'utah','utility').state.terrain.volume>0);
 });
+test('site plans and their visibility survive a reload without shifting alignment', () => {
+ const s=job();s.machine.x=-4;s.machine.z=2;s.machine.heading=Math.PI/2;Sim.setPlan(s);s.planVisible=true;
+ const restored=Save.decode(Save.encode(s),'utah','utility');assert.deepEqual(restored.plan,s.plan);assert.equal(restored.planVisible,true);
+ assert.deepEqual(Sim.planSections(restored),Sim.planSections(s));
+});

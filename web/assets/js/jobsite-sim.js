@@ -52,6 +52,22 @@
     }
     function canTravel(s) { return s.status === 'playing' && s.phase === 'idle' && !s.utilities.work && !s.safetyStop && !s.crewActivity; }
     function crewLevel(s, role) { return Math.min(10, 1 + Math.floor((s.skills[role] || 0) / 50)); }
+    function crewTag(s, role) { return ({ foreman: 'F', operator: 'Operator ', laborer: 'L', joiner: 'PJ' }[role] || role) + crewLevel(s, role); }
+    function setPlan(s) {
+        const origin = bucketPosition(s), c = Math.cos(s.machine.heading), sn = Math.sin(s.machine.heading);
+        let sections = 1;
+        while (sections < 6 && Math.abs(s.machine.x - sections * 2 * c) <= 18 && Math.abs(s.machine.z + sections * 2 * sn) <= 16) sections++;
+        s.plan = { ...origin, heading: s.machine.heading, sections, depth: PIPE.depth, width: 1.56 * s.fleet.scale };
+    }
+    function planSections(s) {
+        const plan = s.plan, c = Math.cos(plan.heading), sn = Math.sin(plan.heading);
+        return Array.from({ length: plan.sections }, (_, i) => {
+            const x = plan.x - i * 2 * c, z = plan.z + i * 2 * sn;
+            const depths = [-.9, 0, .9].map(offset => groundDepth(s, x + offset * c, z - offset * sn)), depth = Math.min(...depths), max = Math.max(...depths);
+            const installed = s.utilities.pipes.some(p => Math.hypot(p.x - x, p.z - z) < .6 && Math.abs(Math.cos(p.heading - plan.heading)) > .95);
+            return { x, z, station: i * 2, depth, installed, ready: depth >= PIPE.depth - PIPE.tolerance && max <= PIPE.depth + PIPE.tolerance && max - depth <= .18 };
+        });
+    }
     function crewActivity(s, type) {
         if (s.status !== 'playing' || s.phase !== 'idle' || s.utilities.work || s.crewActivity || !['spotting', 'operation', 'lunch'].includes(type)) return false;
         clearCrew(s); s.crewActivity = { type, elapsed: 0, duration: type === 'lunch' ? 10 : 8 };
@@ -237,6 +253,7 @@
             crew: previous?.crew || Array.from({ length: 3 }, (_, i) => ({ x: -4.5 - i * .8, z: 8 })), safetyStop: previous?.safetyStop || false, clearingCrew: previous?.clearingCrew || false,
             truckPose: previous?.truckPose ? { ...previous.truckPose } : { x: .25, z: -6 }, haulBlocked: previous?.haulBlocked || false,
             skills: previous?.skills ? { ...previous.skills } : { foreman: 0, operator: 0, laborer: 0, joiner: 0, spotting: 0 }, energy: previous?.energy ?? 100, crewActivity: previous?.crewActivity || null,
+            plan: previous?.plan || { x: 5 * fleet.scale, z: -.38 * fleet.scale, heading: 0, sections: 6, depth: PIPE.depth, width: 1.56 * fleet.scale }, planVisible: previous?.planVisible || false,
             graded: previous?.graded || [], throttle: previous?.throttle || 'work', fuel: previous?.fuel || 0, history: previous?.history || [],
             credits: previous ? previous.credits : 0,
             upgrades: previous ? { ...previous.upgrades } : { bucket: false, dispatch: false },
@@ -412,5 +429,5 @@
             if (s.status !== 'playing') { s.operateHeld = false; s.history.push({ level: s.level, result: s.status, hauled: s.hauled, elapsed: s.elapsed }); }
         }
     }
-    return { REGIONS, FLEETS, SOILS, CONTRACTS, TERRAIN, PIPE, THROTTLES, engine, setThrottle, crewLevel, crewActivity, crewHome, truckPosition, truckPathClear, clearCrew, regionById, soil, bucketCapacity, bucketPosition, groundDepth, setDrive, canTravel, turn, backUp, trenchStatus, pipeCandidate, connectionCandidate, startPipeWork, digDuration, haulDuration, timingPeriod, createState, start, press, release, cancelCharge, setOperateHeld, pause, buy, step, meter };
+    return { REGIONS, FLEETS, SOILS, CONTRACTS, TERRAIN, PIPE, THROTTLES, engine, setThrottle, crewLevel, crewTag, crewActivity, crewHome, truckPosition, truckPathClear, clearCrew, setPlan, planSections, regionById, soil, bucketCapacity, bucketPosition, groundDepth, setDrive, canTravel, turn, backUp, trenchStatus, pipeCandidate, connectionCandidate, startPipeWork, digDuration, haulDuration, timingPeriod, createState, start, press, release, cancelCharge, setOperateHeld, pause, buy, step, meter };
 });
