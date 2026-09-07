@@ -246,6 +246,8 @@
         text('safety-status', state.safetyStop ? state.clearingCrew ? 'Crew clearing / equipment stopped' : 'STOP WORK / call Clear crew' : state.haulBlocked ? 'Haul path blocked / relocate loading pad' : 'Keep crew clear of the swing and haul zones');
         $('safety-status').classList.toggle('is-warning', state.safetyStop || state.haulBlocked);
         $('clear-crew').disabled = state.status !== 'playing' || !!state.utilities.work || state.clearingCrew;
+        text('switch-truck', state.truckRoute.length ? 'Cancel truck move' : 'Switch truck side');
+        $('switch-truck').disabled = state.truckRoute.length ? state.status !== 'playing' : !Sim.canTravel(state) || state.truckState !== 'waiting';
         text('density-note', soil.density.toFixed(2) + ' t/m3 bank density preset');
         text('engine-status', Sim.engine(state).rpm + ' RPM / ' + Sim.engine(state).fuel + ' L/h working / ' + state.fuel.toFixed(2) + ' L used');
         text('engine-unlock', state.graded.length >= 3 ? 'Throttle unlocked' : state.graded.length * 2 + ' / 6 m on grade to unlock throttle');
@@ -302,6 +304,7 @@
     $('restart-job').addEventListener('click', () => { clearOperate(); state = Sim.createState(state.level, state.practice, state); lastStatus = ''; hud(); saveJob(); });
     $('throttle').addEventListener('change', e => { Sim.setThrottle(state, e.target.value); hud(); saveJob(); canvas.focus({ preventScroll: true }); });
     $('clear-crew').addEventListener('click', () => { clearOperate(); stopTravel(); Sim.clearCrew(state); hud(); canvas.focus({ preventScroll: true }); });
+    $('switch-truck').addEventListener('click', () => { clearOperate(); stopTravel(); Sim.switchTruckSide(state); hud(); saveJob(); canvas.focus({ preventScroll: true }); });
     $('plan-toggle').addEventListener('click', () => { if (!sceneReady) return; clearOperate(); stopTravel(); state.planVisible = !state.planVisible; scene.dirty = true; const view = state.planVisible ? 'overhead' : 'site'; scene.setCamera(view); document.querySelectorAll('[data-camera]').forEach(button => button.classList.toggle('selected', button.dataset.camera === view)); hud(); saveJob(); canvas.focus({ preventScroll: true }); });
     $('plan-origin').addEventListener('click', () => { Sim.setPlan(state); hud(); saveJob(); canvas.focus({ preventScroll: true }); });
     for (const type of ['spotting', 'operation', 'lunch']) $('crew-' + type).addEventListener('click', () => { clearOperate(); stopTravel(); Sim.crewActivity(state, type); hud(); saveJob(); });

@@ -50,7 +50,7 @@
         const length = Math.max(1, Math.hypot(x, z));
         s.drive.x = x / length; s.drive.z = z / length;
     }
-    function canTravel(s) { return s.status === 'playing' && s.phase === 'idle' && !s.utilities.work && !s.safetyStop && !s.crewActivity; }
+    function canTravel(s) { return s.status === 'playing' && s.phase === 'idle' && !s.utilities.work && !s.safetyStop && !s.crewActivity && !s.truckRoute.length; }
     function crewLevel(s, role) { return Math.min(10, 1 + Math.floor((s.skills[role] || 0) / 50)); }
     function crewTag(s, role) { return ({ foreman: 'F', operator: 'Operator ', laborer: 'L', joiner: 'PJ' }[role] || role) + crewLevel(s, role); }
     function setPlan(s) {
@@ -81,30 +81,79 @@
     function truckPosition(s, time = s.truckTime) {
         const ease = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
         const offset = s.truckState === 'hauling' ? ease(time / 1.6) * 38 : s.truckState === 'returning' ? (1 - ease(time / haulDuration(s))) * 38 : 0;
-        const x = .25 + offset, z = -6, c = Math.cos(s.machine.heading), sn = Math.sin(s.machine.heading);
+        const x = .25 + offset, z = s.haulSide * 6, c = Math.cos(s.machine.heading), sn = Math.sin(s.machine.heading);
         return { x: s.machine.x + x * c + z * sn, z: s.machine.z - x * sn + z * c };
+    }
+    function switchTruckSide(s) {
+        if (s.status === 'playing' && s.truckRoute.length) {
+            s.truckRoute = []; s.truckParked = true; s.message = 'Truck parked. Reposition the spread, then call Switch truck side again.'; return true;
+        }
+        if (!canTravel(s) || s.truckState !== 'waiting') return false;
+        s.haulSide *= -1; s.truckParked = false;
+        const c = Math.cos(s.machine.heading), sn = Math.sin(s.machine.heading);
+        const approach = (s.truckPose.x - s.machine.x) * sn + (s.truckPose.z - s.machine.z) * c;
+        let end = 14;
+        const project = (x, z) => (x - s.machine.x) * c - (z - s.machine.z) * sn;
+        for (const pipe of [...s.utilities.pipes, ...s.stockpiles]) end = Math.max(end, project(pipe.x, pipe.z) + pipe.length / 2 + 8);
+        const stride = TERRAIN.segments + 1, spacing = TERRAIN.size / TERRAIN.segments;
+        s.terrain.depths.forEach((depth, index) => {
+            if (depth > .25) end = Math.max(end, project(index % stride * spacing - TERRAIN.size / 2, Math.floor(index / stride) * spacing - TERRAIN.size / 2) + 8);
+        });
+        s.truckRoute = [[end, approach], [end, s.haulSide * 6], [.25, s.haulSide * 6]].map(([x, z]) => ({ x: s.machine.x + x * c + z * sn, z: s.machine.z - x * sn + z * c }));
+        setDrive(s, 0, 0); s.advance = null; s.operateHeld = false;
+        s.message = 'Truck changing loading sides via the clear end of the pad. Keep the crew clear.';
+        return true;
     }
     function truckPathClear(s, from, to) {
         const distance = Math.hypot(to.x - from.x, to.z - from.z), steps = Math.max(1, Math.ceil(distance / .4));
+        const heading = s.truckRoute.length > 1 ? s.truckHeading : s.machine.heading, c = Math.cos(heading), sn = Math.sin(heading);
+        const pipes = [...s.utilities.pipes, ...s.stockpiles];
+        const overlap = pipes.map(pipe => truckPipeOverlap(from.x, from.z, heading, pipe));
         for (let step = 0; step <= steps; step++) {
             const x = from.x + (to.x - from.x) * step / steps, z = from.z + (to.z - from.z) * step / steps;
-            for (const [dx, dz] of [[0, 0], [-2, -1.1], [-2, 1.1], [2, -1.1], [2, 1.1], [0, -1.1], [0, 1.1]]) {
-                const c = Math.cos(s.machine.heading), sn = Math.sin(s.machine.heading);
-                if (groundDepth(s, x + dx * c + dz * sn, z - dx * sn + dz * c) > .25) return false;
+            for (const dx of [-3, -1, 1, 3, 4.4]) for (const dz of [-1.35, 0, 1.35]) {
+                const px = x + dx * c + dz * sn, pz = z - dx * sn + dz * c;
+                if (groundDepth(s, px, pz) > .25) return false;
             }
-            for (const pipe of s.utilities.pipes) {
-                const dx = x - pipe.x, dz = z - pipe.z, c = Math.cos(pipe.heading), sn = Math.sin(pipe.heading);
-                const along = Math.max(-1, Math.min(1, dx * c - dz * sn));
-                if (Math.hypot(dx - along * c, dz + along * sn) < 2.3) return false;
+            for (let i = 0; i < pipes.length; i++) {
+                const depth = truckPipeOverlap(x, z, heading, pipes[i]);
+                // Older saves may have a truck inside formerly decorative stock. Allow only a steadily receding exit.
+                if (step && depth > 0 && (overlap[i] === 0 || depth >= overlap[i] - 1e-6)) return false;
+                overlap[i] = depth;
             }
         }
         return true;
     }
+    function truckPipeOverlap(x, z, heading, pipe) {
+        const a = { x: Math.cos(heading), z: -Math.sin(heading) }, b = { x: -a.z, z: a.x };
+        const p = { x: Math.cos(pipe.heading), z: -Math.sin(pipe.heading) }, q = { x: -p.z, z: p.x };
+        const dx = x + .7 * a.x - pipe.x, dz = z + .7 * a.z - pipe.z;
+        const dot = (u, v) => Math.abs(u.x * v.x + u.z * v.z);
+        let overlap = Infinity;
+        for (const axis of [a, b, p, q]) {
+            const truckExtent = 3.7 * dot(axis, a) + 1.35 * dot(axis, b);
+            const pipeExtent = pipe.length / 2 * dot(axis, p) + (pipe.radius || .18) * dot(axis, q) + .55;
+            overlap = Math.min(overlap, truckExtent + pipeExtent - Math.abs(dx * axis.x + dz * axis.z));
+        }
+        return Math.max(0, overlap);
+    }
+    function pipeObstacleAt(s, x, z, clearance) {
+        for (const list of [s.utilities.pipes, s.stockpiles]) for (const pipe of list) {
+            const dx = x - pipe.x, dz = z - pipe.z, c = Math.cos(pipe.heading), sn = Math.sin(pipe.heading), half = pipe.length / 2;
+            const along = Math.max(-half, Math.min(half, dx * c - dz * sn));
+            if (Math.hypot(dx - along * c, dz + along * sn) < clearance + (pipe.radius || .18)) return true;
+        }
+        return false;
+    }
     function moveTruck(s, target, dt) {
         const from = s.truckPose, dx = target.x - from.x, dz = target.z - from.z, distance = Math.hypot(dx, dz);
+        s.truckHeading = s.truckRoute.length > 1 && distance > .01 ? Math.atan2(-dz, dx) : s.machine.heading;
         const travel = Math.min(distance, dt * 32), next = { x: from.x + dx / (distance || 1) * travel, z: from.z + dz / (distance || 1) * travel };
-        if (s.crew.some(person => Math.hypot(person.x - next.x, person.z - next.z) < 2.3)) { stopForCrew(s); return false; }
-        if (!truckPathClear(s, from, next)) { s.haulBlocked = true; s.message = 'Haul path blocked by open trench or pipe. Move the excavator to a clear loading pad.'; return false; }
+        for (const px of [-3, -1, 1, 3, 4.4]) for (const pz of [-1.35, 0, 1.35]) {
+            const c = Math.cos(s.truckHeading), sn = Math.sin(s.truckHeading);
+            if (s.crew.some(person => Math.hypot(person.x - next.x - px * c - pz * sn, person.z - next.z + px * sn - pz * c) < 1.2)) { stopForCrew(s); return false; }
+        }
+        if (!truckPathClear(s, from, next)) { s.haulBlocked = true; s.message = 'Haul path blocked by trench or pipe. Switch truck side or move to a clear loading pad.'; return false; }
         s.haulBlocked = false; s.truckPose = next; return true;
     }
     function stopForCrew(s) {
@@ -119,7 +168,6 @@
     }
     function updateCrew(s, dt) {
         const work = s.utilities.work;
-        if (!work && !s.clearingCrew) return true;
         let arrived = true;
         s.crew.forEach((person, i) => {
             let target = crewHome(s, i);
@@ -156,7 +204,8 @@
     function stableGround(s, x, z) {
         const c = Math.cos(s.machine.heading), sn = Math.sin(s.machine.heading);
         for (const front of [-1.8, 0, 1.8]) for (const side of [-1.2, 0, 1.2]) {
-            if (groundDepth(s, x + (front * c + side * sn) * s.fleet.scale, z + (-front * sn + side * c) * s.fleet.scale) > .32) return false;
+            const px = x + (front * c + side * sn) * s.fleet.scale, pz = z + (-front * sn + side * c) * s.fleet.scale;
+            if (groundDepth(s, px, pz) > .32 || pipeObstacleAt(s, px, pz, .6)) return false;
         }
         return true;
     }
@@ -252,6 +301,8 @@
             utilities: previous?.utilities || { pipes: [], joints: [], work: null },
             crew: previous?.crew || Array.from({ length: 3 }, (_, i) => ({ x: -4.5 - i * .8, z: 8 })), safetyStop: previous?.safetyStop || false, clearingCrew: previous?.clearingCrew || false,
             truckPose: previous?.truckPose ? { ...previous.truckPose } : { x: .25, z: -6 }, haulBlocked: previous?.haulBlocked || false,
+            stockpiles: previous?.stockpiles || Array.from({ length: 3 }, (_, i) => ({ x: -7 - i, z: -6, heading: Math.PI / 2, length: 4.5, radius: .42 })),
+            haulSide: previous?.haulSide || -1, truckRoute: previous?.truckRoute || [], truckHeading: previous?.truckHeading || 0, truckParked: previous?.truckParked || false,
             skills: previous?.skills ? { ...previous.skills } : { foreman: 0, operator: 0, laborer: 0, joiner: 0, spotting: 0 }, energy: previous?.energy ?? 100, crewActivity: previous?.crewActivity || null,
             plan: previous?.plan || { x: 5 * fleet.scale, z: -.38 * fleet.scale, heading: 0, sections: 6, depth: PIPE.depth, width: 1.56 * fleet.scale }, planVisible: previous?.planVisible || false,
             graded: previous?.graded || [], throttle: previous?.throttle || 'work', fuel: previous?.fuel || 0, history: previous?.history || [],
@@ -276,6 +327,7 @@
         if (s.safetyStop) return false;
         if (s.crew.some(person => Math.hypot(person.x - s.machine.x, person.z - s.machine.z) < 6.8 * s.fleet.scale)) { stopForCrew(s); return false; }
         const point = bucketPosition(s);
+        if (!s.bucket && s.stockpiles.some(pipe => Math.abs(point.x - pipe.x) < 1 && Math.abs(point.z - pipe.z) < 2.8)) { s.message = 'Stored pipe at the bucket. Move the cut clear of the stockpile.'; return false; }
         if (!s.bucket && s.utilities.pipes.some(p => Math.hypot(p.x - point.x, p.z - point.z) < 1.4)) { s.message = 'Pipe is installed here. Back up 2 m to extend the trench.'; return false; }
         if (s.bucket > 0) {
             if (s.truckState !== 'waiting') { s.message = 'Truck inbound. Prep the next bite while the haul unit returns.'; return false; }
@@ -381,11 +433,13 @@
                 const nx = Math.max(-18, Math.min(18, s.machine.x + dx / (s.advance ? length || 1 : 1) * distance));
                 const nz = Math.max(-16, Math.min(16, s.machine.z + dz / (s.advance ? length || 1 : 1) * distance));
                 if (stableGround(s, nx, nz)) { s.machine.x = nx; s.machine.z = nz; }
-                else { s.advance = null; setDrive(s, 0, 0); s.message = 'Trench ahead. Reverse to keep the tracks on firm ground.'; }
+                else { s.advance = null; setDrive(s, 0, 0); s.message = 'Trench or pipe ahead. Reverse to keep the tracks on clear, firm ground.'; }
                 if (s.advance && length <= speed * d) { s.advance = null; s.message = 'Aligned for the next section. Hold Space to dig.'; }
             }
-            const truckCanMove = !s.safetyStop && moveTruck(s, truckPosition(s, s.truckTime + d), d);
-            if (truckCanMove && s.truckState !== 'waiting') {
+            const target = s.truckRoute[0] || (s.truckParked ? s.truckPose : truckPosition(s, s.truckTime + d));
+            const truckCanMove = !s.safetyStop && moveTruck(s, target, d);
+            if (s.truckRoute.length && Math.hypot(s.truckPose.x - target.x, s.truckPose.z - target.z) < .05) s.truckRoute.shift();
+            if (truckCanMove && !s.truckRoute.length && s.truckState !== 'waiting') {
                 s.truckTime += d;
                 if (s.truckState === 'hauling' && s.truckTime >= 1.6) {
                     s.truckState = 'returning'; s.truckTime = 0; s.truck = 0;
@@ -429,5 +483,5 @@
             if (s.status !== 'playing') { s.operateHeld = false; s.history.push({ level: s.level, result: s.status, hauled: s.hauled, elapsed: s.elapsed }); }
         }
     }
-    return { REGIONS, FLEETS, SOILS, CONTRACTS, TERRAIN, PIPE, THROTTLES, engine, setThrottle, crewLevel, crewTag, crewActivity, crewHome, truckPosition, truckPathClear, clearCrew, setPlan, planSections, regionById, soil, bucketCapacity, bucketPosition, groundDepth, setDrive, canTravel, turn, backUp, trenchStatus, pipeCandidate, connectionCandidate, startPipeWork, digDuration, haulDuration, timingPeriod, createState, start, press, release, cancelCharge, setOperateHeld, pause, buy, step, meter };
+    return { REGIONS, FLEETS, SOILS, CONTRACTS, TERRAIN, PIPE, THROTTLES, engine, setThrottle, crewLevel, crewTag, crewActivity, crewHome, truckPosition, truckPathClear, switchTruckSide, clearCrew, setPlan, planSections, regionById, soil, bucketCapacity, bucketPosition, groundDepth, setDrive, canTravel, turn, backUp, trenchStatus, pipeCandidate, connectionCandidate, startPipeWork, digDuration, haulDuration, timingPeriod, createState, start, press, release, cancelCharge, setOperateHeld, pause, buy, step, meter };
 });

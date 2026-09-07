@@ -321,8 +321,9 @@ export class JobsiteScene {
             }
         }
         const pipeMat = this.material('#556a59', .15, .72);
-        for (let i = 0; i < 6; i++) {
-            const pipe = this.mesh(new THREE.CylinderGeometry(.42, .42, 4.5, 20, 1, true), pipeMat, [-7 - i % 3, .5 + Math.floor(i / 3) * .8, -6], this.root); pipe.rotation.x = Math.PI / 2;
+        for (const stock of s.stockpiles) for (let layer = 0; layer < 2; layer++) {
+            const pipe = this.mesh(new THREE.CylinderGeometry(stock.radius, stock.radius, stock.length, 20, 1, true), pipeMat, [stock.x, .5 + layer * .8, stock.z], this.root);
+            pipe.quaternion.setFromUnitVectors(v(0, 1, 0), v(Math.cos(stock.heading), 0, -Math.sin(stock.heading)));
         }
         const coneMat = this.material('#d67931', .03, .82), white = this.material('#e5debd');
         for (let i = 0; i < 8; i++) {
@@ -499,7 +500,7 @@ export class JobsiteScene {
         this.machine.position.set(s.machine.x, 0, s.machine.z); this.machine.rotation.y = s.machine.heading;
         const anchor = v(s.machine.x, 0, s.machine.z), travel = anchor.clone().sub(this.cameraAnchor);
         this.camera.position.add(travel); this.controls.target.add(travel); this.cameraAnchor.copy(anchor);
-        this.upper.rotation.y = swing * 1.7;
+        this.upper.rotation.y = swing * 1.7 * -s.haulSide;
         const t = s.phase === 'digging' ? Math.min(1, s.phaseTime / Sim.digDuration(s)) : 0;
         let toolX = s.bucket > 0 ? 4.6 : 6, toolY = s.bucket > 0 ? 1.2 : .3, curl = s.bucket > 0 ? -.95 : .05;
         if (s.phase === 'digging') {
@@ -527,7 +528,7 @@ export class JobsiteScene {
         this.bucketGroup.scale.setScalar(bucketScale);
         this.bucketLoad.visible = s.bucket > 0 || (s.phase === 'digging' && t > .3);
         this.truck.position.set(s.truckPose.x, 0, s.truckPose.z);
-        const turn = Math.atan2(Math.sin(s.machine.heading - this.truck.rotation.y), Math.cos(s.machine.heading - this.truck.rotation.y));
+        const turn = Math.atan2(Math.sin(s.truckHeading - this.truck.rotation.y), Math.cos(s.truckHeading - this.truck.rotation.y));
         this.truck.rotation.y += turn * Math.min(1, dt * 8);
         this.truckLoad.visible = s.truck > 0;
         this.truckLoad.scale.y = Math.max(.05, s.truck / s.fleet.capacity * 1.38);

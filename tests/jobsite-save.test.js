@@ -76,3 +76,12 @@ test('site plans and their visibility survive a reload without shifting alignmen
  const restored=Save.decode(Save.encode(s),'utah','utility');assert.deepEqual(restored.plan,s.plan);assert.equal(restored.planVisible,true);
  assert.deepEqual(Sim.planSections(restored),Sim.planSections(s));
 });
+test('stored pipe positions survive reload and migration from an older save', () => {
+ const s=job();const restored=Save.decode(Save.encode(s),'utah','utility');assert.deepEqual(restored.stockpiles,s.stockpiles);
+ const old=JSON.parse(Save.encode(s));delete old.state.stockpiles; delete old.state.truckParked;assert.deepEqual(Save.decode(JSON.stringify(old),'utah','utility').stockpiles,s.stockpiles);
+});
+test('truck loading side and an unfinished relocation remain at the saved position', () => {
+ const s=job();Sim.switchTruckSide(s);Sim.step(s,.3);const restored=Save.decode(Save.encode(s),'utah','utility');
+ assert.equal(restored.haulSide,1);assert.deepEqual(restored.truckRoute,s.truckRoute);assert.deepEqual(restored.truckPose,s.truckPose);
+ Sim.pause(restored);Sim.step(restored,5);assert.equal(restored.truckRoute.length,0);assert.equal(restored.truckPose.z,6);
+});

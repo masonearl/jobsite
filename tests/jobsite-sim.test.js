@@ -10,8 +10,13 @@ function dump(s) { assert.equal(Sim.press(s), true); Sim.step(s, 2); }
 function waitTruck(s) { if (s.truckState !== 'waiting') Sim.step(s, 1.65 + Sim.haulDuration(s)); }
 function freshDig(s) {
     // Production checks use separate cuts, with time allowed for repositioning. Navigation is checked independently.
-    s.machine.x = 15 - (s.digs % 11) * 3; s.machine.z = 15 - Math.floor(s.digs / 11) * 6;
-    s.crew = s.crew.map((_, i) => Sim.crewHome(s, i)); s.truckPose = Sim.truckPosition(s);
+    let index = s.nextTestCut || 0;
+    while (index < 66) {
+        s.machine.x = 15 - (index % 11) * 3; s.machine.z = 15 - Math.floor(index / 11) * 6; index++;
+        s.truckPose = Sim.truckPosition(s);
+        if (Sim.truckPathClear(s, s.truckPose, { x: s.truckPose.x + 38, z: s.truckPose.z })) break;
+    }
+    s.nextTestCut = index; s.crew = s.crew.map((_, i) => Sim.crewHome(s, i));
     Sim.step(s, 1.1); if (s.status === 'playing') dig(s);
 }
 
@@ -201,7 +206,7 @@ test('pause freezes the pipe crew and travel cannot cross a deep trench', () => 
     Sim.startPipeWork(s, 'install'); Sim.step(s, .3); Sim.pause(s);
     const elapsed = s.utilities.work.elapsed; Sim.step(s, 10); assert.equal(s.utilities.work.elapsed, elapsed);
     Sim.pause(s); Sim.step(s, 10); Sim.clearCrew(s); Sim.step(s, 5); Sim.setDrive(s, 1, 0); Sim.step(s, 10);
-    assert.ok(s.machine.x < 4); assert.match(s.message, /Trench ahead/);
+    assert.ok(s.machine.x < 4); assert.match(s.message, /Trench or pipe ahead/);
 });
 
 test('held operation repeats dig/load, rejects repeat resets and stops after release', () => {
@@ -261,6 +266,7 @@ test('throttle unlocks through distinct on-grade sections and trades speed for f
     const s = playing(0, true); assert.equal(Sim.setThrottle(s, 'boost'), false);
     for (let i = 0; i < 3; i++) {
         Sim.setOperateHeld(s, true); Sim.step(s, 20); Sim.setOperateHeld(s, false);
+        if (i === 1) { Sim.switchTruckSide(s); Sim.step(s, 5); }
         if (i < 2) { assert.equal(Sim.backUp(s), true); Sim.step(s, 1.1); }
     }
     assert.equal(s.graded.length, 3); assert.equal(Sim.setThrottle(s, 'boost'), true);
@@ -332,4 +338,46 @@ test('site plan follows the machine heading, stays within the work area and repo
  Sim.clearCrew(s);Sim.step(s,5);Sim.turn(s,1);Sim.step(s,.6);Sim.setPlan(s);
  const sections=Sim.planSections(s);assert.ok(Math.abs(sections[1].z-sections[0].z-2)<1e-8);assert.ok(Math.abs(sections[1].x-sections[0].x)<1e-8);
  s.machine.z=16;Sim.setPlan(s);assert.equal(s.plan.sections,1);
+});
+test('stored pipe bundles block the actual truck footprint and excavator tracks', () => {
+ const s=playing(0,true);const original=s.stockpiles.map(p=>({...p}));
+ assert.equal(Sim.truckPathClear(s,{x:0,z:-6},{x:-8,z:-6}),false);
+ assert.equal(Sim.truckPathClear(s,{x:0,z:-13},{x:-12,z:-13}),true);
+ s.machine.x=-8;Sim.step(s,1);assert.equal(s.haulBlocked,true);assert.ok(s.truckPose.x>-4);
+ assert.deepEqual(s.stockpiles,original);
+ const moving=playing(0,true);moving.machine.x=-8;moving.machine.z=0;moving.crew=moving.crew.map((_,i)=>Sim.crewHome(moving,i));Sim.setDrive(moving,0,-1);Sim.step(moving,5);
+ assert.ok(moving.machine.z>-3.75);assert.equal(moving.drive.z,0);
+});
+test('switching truck side routes around the pad and permits the next trench section', () => {
+ const s=playing(0,true);s.truck=8;
+ assert.equal(Sim.switchTruckSide(s),true);assert.equal(Sim.canTravel(s),false);
+ Sim.step(s,5);assert.equal(s.truckRoute.length,0);assert.equal(s.haulSide,1);assert.equal(s.truckPose.z,6);assert.equal(s.truck,8);
+ assert.equal(s.safetyStop,false);assert.equal(s.haulBlocked,false);assert.equal(s.truckHeading,0);
+ Sim.backUp(s);Sim.step(s,1.1);Sim.setOperateHeld(s,true);Sim.step(s,15);Sim.setOperateHeld(s,false);
+ assert.ok(s.terrain.volume>0);assert.equal(s.safetyStop,false);assert.equal(s.haulBlocked,false);
+});
+test('an old truck pose overlapping stored pipe can exit without moving deeper through it', () => {
+ const s=playing(0,true);s.machine.x=-5.4;s.truckPose=Sim.truckPosition(s);s.crew=s.crew.map((_,i)=>Sim.crewHome(s,i));
+ const pose={...s.truckPose};
+ assert.equal(Sim.truckPathClear(s,pose,{x:pose.x-3,z:pose.z}),false);
+ assert.equal(Sim.truckPathClear(s,pose,{x:pose.x+8,z:pose.z}),true);
+ assert.equal(Sim.switchTruckSide(s),true);Sim.step(s,5);
+ assert.equal(s.truckRoute.length,0);assert.equal(s.haulBlocked,false);assert.equal(s.safetyStop,false);assert.equal(s.truckPose.z,6);
+});
+test('truck side changes clear the far end of an existing quarry trench and can be canceled', () => {
+ const s=Sim.createState(0,true,null,'iceland');Sim.start(s);
+ for(let i=0;i<2;i++){
+  Sim.setOperateHeld(s,true);Sim.step(s,20);Sim.setOperateHeld(s,false);
+  assert.equal(Sim.startPipeWork(s,'install'),true);Sim.step(s,10);Sim.clearCrew(s);Sim.step(s,5);
+  Sim.backUp(s);Sim.step(s,2);
+ }
+ s.machine.x=-5.4;s.truckPose=Sim.truckPosition(s);s.crew=s.crew.map((_,i)=>Sim.crewHome(s,i));
+ assert.equal(Sim.switchTruckSide(s),true);assert.ok(s.truckRoute[0].x>12);
+ Sim.step(s,8);assert.equal(s.truckRoute.length,0);assert.equal(s.haulBlocked,false);assert.equal(s.safetyStop,false);
+ assert.equal(Sim.switchTruckSide(s),true);assert.equal(Sim.canTravel(s),false);
+ assert.equal(Sim.switchTruckSide(s),true);assert.equal(s.truckRoute.length,0);assert.equal(Sim.canTravel(s),true);
+ const parked={...s.truckPose};Sim.step(s,2);assert.deepEqual(s.truckPose,parked);
+ s.haulSide=-1;s.truckPose={x:5.4263,z:-3.1931};
+ assert.equal(Sim.switchTruckSide(s),true);assert.equal(s.truckRoute[0].z,s.truckPose.z);Sim.step(s,8);
+ assert.equal(s.truckRoute.length,0);assert.equal(s.haulBlocked,false);assert.equal(s.safetyStop,false);
 });

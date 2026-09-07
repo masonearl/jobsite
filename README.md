@@ -32,7 +32,7 @@ There is no build step, account, API key, backend service, or package install ne
 - **Site plan:** show a saved pipe-corridor layout over the actual terrain. Planned, on-grade and installed sections have different colors. **Plan from bucket** aligns a new plan with the current machine heading.
 - **Drag / scroll / pinch:** orbit and zoom the camera. Camera orientation does not change forward or reverse.
 - **Expand game:** fill the browser viewport. **Fullscreen:** use native fullscreen where supported. **Esc:** exit the expanded view.
-- **Clear crew:** park workers outside the equipment zone after pipe work. Workers stop nearby equipment; open cuts and exposed pipe stop a blocked truck. Reposition the loading pad to a clear lane.
+- **Clear crew:** park workers outside the equipment zone after pipe work. Workers stop nearby equipment; open cuts, exposed pipe and stored bundles stop a blocked truck. **Switch truck side** routes it beyond the existing trench to the other loading pad. **Cancel truck move** parks it if the route is blocked; reposition the spread, then call it again.
 - **Crew & upgrades:** train spotting or machine operation, take lunch, and review saved crew levels.
 - **Throttle:** three distinct 2 m sections on grade unlock Eco, Work and Boost RPM presets with different speeds and fuel use.
 - **P:** pause when the game has keyboard focus. Opening the guide or map also pauses the shift.
@@ -75,7 +75,7 @@ The live demo is hosted within openmud.ai; this repository is the standalone gam
 
 The renderer is Three.js r170, capped at 30 frames per second and one device pixel per CSS pixel, with a 1024-pixel shadow map. The 56 m terrain grid has 0.25 m spacing (50,625 vertices). Excavation updates only the affected vertices and nearby normals. Rendering stops when the page is hidden or the map/guide is open, and settled paused scenes draw only when needed. There is no physics engine or server simulation.
 
-Worker zones and vehicle obstacles use simple geometric checks. Blocked trucks stop; they do not perform a full road-network route search. The game currently models open cuts and exposed pipes; backfilling is not implemented. Machine capacity, density, fuel and time are explicit game presets. Bank volume is integrated from the height field; mass equals removed volume times the current bite density. Loose-volume swell is not modeled.
+Worker zones and vehicle obstacles use simple geometric checks. Blocked trucks stop. Switching loading sides uses a route around the far end of existing excavation; it does not perform a full road-network route search. The game currently models open cuts and exposed pipes; backfilling is not implemented. Machine capacity, density, fuel and time are explicit game presets. Bank volume is integrated from the height field; mass equals removed volume times the current bite density. Loose-volume swell is not modeled.
 
 Performance depends on the GPU, browser and number of placed pipes. Operator notes show CPU render-submission time and draw calls; this does not measure GPU time or total browser memory. Device saves are subject to browser storage availability and limits.
 
