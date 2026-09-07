@@ -116,7 +116,8 @@
     document.addEventListener('fullscreenchange', syncDisplay);
     document.addEventListener('webkitfullscreenchange', syncDisplay);
     document.addEventListener('keydown', e => {
-        if (e.key === 'Escape' && expandedView) { expandedView = false; syncDisplay(); $('fullscreen-toggle').focus({ preventScroll: true }); }
+        if (e.key === 'Escape' && fullscreenElement() === app) { e.preventDefault(); toggleFullscreen(); }
+        else if (e.key === 'Escape' && expandedView) { expandedView = false; syncDisplay(); $('fullscreen-toggle').focus({ preventScroll: true }); }
     });
     function updateRegion() {
         const n = Sim.REGIONS.indexOf(selected) + 1;
