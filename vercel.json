@@ -1,0 +1,11 @@
+{
+  "outputDirectory": "web",
+  "framework": null,
+  "cleanUrls": true,
+  "rewrites": [
+    {
+      "source": "/jobsite",
+      "destination": "/index.html"
+    }
+  ]
+}

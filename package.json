@@ -1,0 +1,14 @@
+{
+  "name": "openmud-jobsite",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser construction game: excavate trenches, load trucks, and lay pipe.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "dev": "python3 -m http.server 8000 --directory web"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
