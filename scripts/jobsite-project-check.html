@@ -1,0 +1,28 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Jobsite utility project checks</title>
+<style>body{font:14px system-ui;background:#152018;color:#eef2e9;margin:20px}button{padding:12px}iframe{width:100%;height:850px;border:1px solid #76846c}pre{white-space:pre-wrap}</style>
+<h1>Jobsite utility project checks</h1><p>Real UI handlers and rendering, with simulation time accelerated 12x. Fixture storage is isolated in memory. Node tests cover geometry, material balances and saved-state migration at normal simulation time.</p><button id="run">Run project checks</button><pre id="results">Ready.</pre><div id="game"></div>
+<script>
+let frame; const out=document.querySelector('#results'), delay=ms=>new Promise(r=>setTimeout(r,ms));
+const el=id=>frame.contentDocument.getElementById(id), assert=(condition,message)=>{if(!condition)throw Error(message)}, log=t=>out.textContent+=t+'\n';
+async function wait(fn,message,limit=15000){const start=Date.now();while(!fn()){if(Date.now()-start>limit)throw Error(message);await delay(80)}}
+function click(id){el(id).focus();el(id).click()}
+function key(type,code='Space'){frame.contentDocument.activeElement.dispatchEvent(new frame.contentWindow.KeyboardEvent(type,{code,key:code==='Space'?' ':code,bubbles:true,cancelable:true}))}
+async function fixture(saved=false,scenario=''){frame=document.createElement('iframe');frame.title='Utility project under test';document.querySelector('#game').replaceChildren(frame);frame.src='/__input-fixture?saved='+saved+'&scenario='+scenario+'&speed=12';await wait(()=>el('project-mobilize'),'World screen unavailable')}
+document.querySelector('#run').onclick=async function(){this.disabled=true;out.textContent='';try{
+    await fixture();click('project-mobilize');await wait(()=>!el('project-strip').hidden&&!el('operate').disabled,'Project launch failed');
+    assert(el('quantity-label').textContent==='Accepted line','HUD still counts haul contracts');assert(el('project-phase').textContent==='Set out and check site','Missing site briefing');log('PASS utility launch and project HUD');
+    el('project-method').value='careful';el('project-method').dispatchEvent(new frame.contentWindow.Event('change',{bubbles:true}));click('order-materials');
+    assert(el('project-delivery').textContent.includes('arriving'),'Order ignored');key('keydown');await delay(2500);key('keyup');click('pause-toggle');
+    const time=el('stat-time').textContent;await delay(500);assert(el('stat-time').textContent===time,'Project clock continued while paused');log('PASS ordering, work method and pause');
+    const moved=el('material-moved').textContent;click('guide-toggle');click('guide-return');click('world-toggle');click('project-mobilize');await wait(()=>!el('project-strip').hidden,'Project not restored');
+    assert(el('material-moved').textContent===moved,'Map return lost construction');log('PASS guide and world return preserve the project');
+    key('keydown');await wait(()=>el('overlay-title').textContent==='Line handed over.','Project did not reach handover',75000);key('keyup');
+    assert(el('stat-tons').textContent==='12 / 12 m','Accepted length incorrect');assert([...el('project-stations').children].every(s=>s.textContent.includes('Accepted')),'A section skipped acceptance');
+    assert(el('overlay-copy').textContent.includes('24 compacted lifts'),'Report missing lift records');assert(!el('project-costs').textContent.includes('NaN'),'Invalid project costs');log('PASS complete 12 m project, six inspections and 24 compacted lifts');
+    key('keydown');key('keyup');assert(!el('world-screen').hidden,'Completed project cannot return to world');log('PASS Space continues from the handover screen');
+    await fixture(true,'project-fill');click('project-mobilize');await wait(()=>!el('project-strip').hidden&&!el('operate').disabled,'Saved backfill could not resume');
+    assert(el('project-phase').textContent.includes('Place backfill'),'Active backfill was lost');key('keydown');key('keyup');await wait(()=>el('project-lift').textContent.includes('1 passes'),'Queued compaction after saved fill did not finish',12000);
+    assert(!el('project-inventory').textContent.includes('NaN'),'Saved inventory invalid');click('pause-toggle');log('PASS saved partial backfill resumes with intact resources');
+    log('ALL 6 PROJECT CHECKS PASSED');
+}catch(error){log('FAIL '+error.message);if(el('pause-toggle')?.textContent==='Pause')click('pause-toggle')}finally{this.disabled=false}};
+</script></html>

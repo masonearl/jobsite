@@ -14,6 +14,8 @@ class Handler(SimpleHTTPRequestHandler):
     def translate_path(self, path):
         if path.split('?', 1)[0] == '/__input-check':
             return str(ROOT / 'scripts' / 'jobsite-input-check.html')
+        if path.split('?', 1)[0] == '/__project-check':
+            return str(ROOT / 'scripts' / 'jobsite-project-check.html')
         return super().translate_path(path)
 
     def do_GET(self):
@@ -34,12 +36,16 @@ class Handler(SimpleHTTPRequestHandler):
                 'crew': 's.crew[0]={x:s.machine.x,z:s.machine.z};s.safetyStop=true;',
                 'truck': 's.machine.x=-5.4;s.truckPose=JobsiteSim.truckPosition(s);s.truckParked=true;s.haulBlocked=true;s.crew=s.crew.map((_,i)=>JobsiteSim.crewHome(s,i));',
                 'overlap': 's.truckPose=JobsiteSim.crewHome(s,0);s.truckParked=true;',
+                'project-fill': "JobsiteSim.startProject(s);JobsiteSim.setPrimaryHeld(s,true);for(let i=0;i<10000;i++){JobsiteSim.step(s,.1);if(s.project.work?.type==='fill'&&s.project.work.applied>.2)break;}JobsiteSim.setPrimaryHeld(s,false,true);",
                 'grade': 's.machine.x=0;JobsiteSim.setOperateHeld(s,true);JobsiteSim.step(s,20);JobsiteSim.setOperateHeld(s,false);',
                 'ended': "s.status='lost';",
             }
             setup = scenarios.get(query.get('scenario', [''])[0], '')
             seed = seed.replace('JobsiteSave.write(localStorage,s);', setup + 'JobsiteSave.write(localStorage,s);')
             html = html.replace('<script src="/assets/js/jobsite.js">', '<script>' + seed + '</script><script src="/assets/js/jobsite.js">')
+        if query.get('speed') == ['12']:
+            speed = 'const realStep=JobsiteSim.step;JobsiteSim.step=(state,dt)=>realStep(state,dt*12);'
+            html = html.replace('<script src="/assets/js/jobsite.js">', '<script>' + speed + '</script><script src="/assets/js/jobsite.js">')
         body = html.encode()
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')

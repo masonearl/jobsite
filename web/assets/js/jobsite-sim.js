@@ -50,7 +50,7 @@
         const length = Math.max(1, Math.hypot(x, z));
         s.drive.x = x / length; s.drive.z = z / length;
     }
-    function canTravel(s) { return s.status === 'playing' && s.phase === 'idle' && !s.utilities.work && !s.safetyStop && !s.crewActivity && !s.truckRoute.length && !s.recovery; }
+    function canTravel(s) { return s.status === 'playing' && s.phase === 'idle' && !s.utilities.work && !s.safetyStop && !s.crewActivity && !s.truckRoute.length && !s.recovery && !s.project?.work; }
     function crewLevel(s, role) { return Math.min(10, 1 + Math.floor((s.skills[role] || 0) / 50)); }
     function crewTag(s, role) { return ({ foreman: 'F', operator: 'Operator ', laborer: 'L', joiner: 'PJ' }[role] || role) + crewLevel(s, role); }
     function setPlan(s) {
@@ -69,7 +69,7 @@
         });
     }
     function crewActivity(s, type) {
-        if (s.status !== 'playing' || s.phase !== 'idle' || s.utilities.work || s.crewActivity || !['spotting', 'operation', 'lunch'].includes(type)) return false;
+        if (s.status !== 'playing' || s.phase !== 'idle' || s.utilities.work || s.project?.work || s.crewActivity || !['spotting', 'operation', 'lunch'].includes(type)) return false;
         clearCrew(s); s.crewActivity = { type, elapsed: 0, duration: type === 'lunch' ? 10 : 8 };
         s.message = type === 'lunch' ? 'Foreman: Park the iron. Crew taking lunch on the safe pad.' : 'Foreman: Equipment parked for a crew training drill.';
         return true;
@@ -107,7 +107,7 @@
     function truckPathClear(s, from, to) {
         const distance = Math.hypot(to.x - from.x, to.z - from.z), steps = Math.max(1, Math.ceil(distance / .4));
         const heading = s.truckRoute.length > 1 ? s.truckHeading : s.machine.heading, c = Math.cos(heading), sn = Math.sin(heading);
-        const pipes = [...s.utilities.pipes, ...s.stockpiles];
+        const pipes = [...s.utilities.pipes.filter(p => !p.buried), ...s.stockpiles];
         const overlap = pipes.map(pipe => truckPipeOverlap(from.x, from.z, heading, pipe));
         for (let step = 0; step <= steps; step++) {
             const x = from.x + (to.x - from.x) * step / steps, z = from.z + (to.z - from.z) * step / steps;
@@ -138,7 +138,7 @@
         return Math.max(0, overlap);
     }
     function pipeObstacleAt(s, x, z, clearance) {
-        for (const list of [s.utilities.pipes, s.stockpiles]) for (const pipe of list) {
+        for (const list of [s.utilities.pipes.filter(p => !p.buried), s.stockpiles]) for (const pipe of list) {
             const dx = x - pipe.x, dz = z - pipe.z, c = Math.cos(pipe.heading), sn = Math.sin(pipe.heading), half = pipe.length / 2;
             const along = Math.max(-half, Math.min(half, dx * c - dz * sn));
             if (Math.hypot(dx - along * c, dz + along * sn) < clearance + (pipe.radius || .18)) return true;
@@ -162,12 +162,12 @@
         s.message = 'STOP WORK: crew in the equipment zone. Call Clear crew and wait for acknowledgment.';
     }
     function clearCrew(s) {
-        if (s.status !== 'playing' || s.utilities.work) return false;
+        if (s.status !== 'playing' || s.utilities.work || s.project?.work) return false;
         s.clearingCrew = true; s.safetyStop = true; s.operateHeld = false; cancelCharge(s); setDrive(s, 0, 0); s.advance = null;
         s.message = 'Operator: Clear the swing area. Crew moving to the safe pad.'; return true;
     }
     function updateCrew(s, dt) {
-        const work = s.utilities.work;
+        const work = s.utilities.work || s.project?.work;
         let arrived = true;
         s.crew.forEach((person, i) => {
             let target = crewHome(s, i);
@@ -239,6 +239,7 @@
         return null;
     }
     function startPipeWork(s, type) {
+        if (s.project && !s.project.complete) return false;
         if (!canTravel(s) || s.bucket > 0 || s.advance || Math.abs(s.targetHeading - s.machine.heading) > .02) return false;
         const target = type === 'install' ? pipeCandidate(s) : type === 'connect' ? connectionCandidate(s) : null;
         if (!target) return false;
@@ -250,7 +251,7 @@
     function planCut(s, cut, payload) {
         const n = TERRAIN.segments, step = TERRAIN.size / n, half = TERRAIN.size / 2;
         const c = Math.cos(cut.heading), sn = Math.sin(cut.heading), scale = s.fleet.scale;
-        const radius = 2 * scale, length = 1.3 * scale, width = .78 * scale;
+        const radius = 2 * scale, length = s.project ? Math.max(1.42, 1.3 * scale) : 1.3 * scale, width = .78 * scale;
         const limit = s.alignment ? PIPE.depth : TERRAIN.maxDepth, cells = [];
         const x0 = Math.max(0, Math.floor((cut.x - radius + half) / step)), x1 = Math.min(n, Math.ceil((cut.x + radius + half) / step));
         const z0 = Math.max(0, Math.floor((cut.z - radius + half) / step)), z1 = Math.min(n, Math.ceil((cut.z + radius + half) / step));
@@ -282,6 +283,162 @@
         s.terrain.volume += cut.volume * fraction; s.terrain.mass += s.pendingPayload * fraction;
         s.terrain.revision++;
     }
+    const PROJECT_STAGES = ['Set out', 'Excavate', 'Formation', 'Bedding', 'Pipe', 'Inspect', 'Backfill', 'Compact', 'Accepted'];
+    const PROJECT_METHODS = { careful: { name: 'Careful', duration: 1.25, passes: 2 }, steady: { name: 'Steady', duration: 1, passes: 3 }, fast: { name: 'Fast', duration: .7, passes: 5 } };
+    function projectSection(s) { return s.project?.sections[s.project.active] || null; }
+    function startProject(s) {
+        if (s.project) { if (s.status === 'paused') pause(s); return true; }
+        if (s.phase !== 'idle' || s.utilities.work || s.crewActivity) return false;
+        let sections = null;
+        // Find an intact corridor without deleting a player's previous excavation.
+        for (const z of [4, -4, 10, -10, 16, -16]) {
+            const candidate = Array.from({ length: 6 }, (_, i) => {
+                const machine = { x: 10 - i * 2, z, heading: 0 }, point = bucketPosition({ ...s, machine });
+                return { ...point, heading: 0, machine, stage: 'excavate', lift: 0, passes: 0, accepted: false, filled: 0, water: s.region.biome === 'forest' ? .12 : 0 };
+            });
+            if (candidate.every(p => [-1, 0, 1].every(dx => groundDepth(s, p.x + dx, p.z) < .01) && !cutObstructed(s, p) && stableGround(s, p.machine.x, p.machine.z))) { sections = candidate; break; }
+        }
+        if (!sections) { s.message = 'No intact 12 m corridor here. Choose another region to start a utility project.'; return false; }
+        s.project = { sections, active: 0, checked: false, work: null, delivery: null, method: 'steady', complete: false, elapsed: 0,
+            inventory: { pipe: 2, bedding: .8, fill: 2 }, ordered: 0, delivered: 0, materialPlaced: 0, pipeVolume: 0, filledVolume: 0,
+            costs: { materials: 360, plant: 0, haul: 0 }, earned: 0, log: [], pumping: false };
+        s.practice = true; s.status = 'playing'; s.alignment = true; setOperateHeld(s, false, true); setPrimaryHeld(s, false, true);
+        s.machine = { ...sections[0].machine }; s.targetHeading = 0; s.drive = { x: 0, z: 0 }; s.advance = null; s.steer = 0;
+        s.haulSide = -1; s.truckRoute = []; s.truckParked = false; s.truckTime = 0; s.truckPose = truckPosition(s); s.truckHeading = 0;
+        s.crew = s.crew.map((_, i) => crewHome(s, i)); s.safetyStop = s.clearingCrew = s.haulBlocked = false; s.recovery = null;
+        setPlan(s); s.planVisible = false; s.message = 'Utility project: 12 m of pipe, four backfill lifts per section. Space begins the site briefing.';
+        return true;
+    }
+    function setProjectMethod(s, method) {
+        const p = s.project, section = projectSection(s);
+        if (!p || p.complete || p.work || !PROJECT_METHODS[method] || section?.stage === 'compact' && section.passes > 0) return false;
+        p.method = method; return true;
+    }
+    function projectCost(s) { return s.project ? Object.values(s.project.costs).reduce((a, b) => a + b, 0) : 0; }
+    function projectLog(s, message) {
+        s.project.log.unshift({ time: s.project.elapsed, station: s.project.active * 2, message });
+        s.project.log.length = Math.min(24, s.project.log.length); s.message = message;
+    }
+    function orderMaterials(s) {
+        const p = s.project;
+        if (!p || p.complete || p.delivery || s.status !== 'playing') return false;
+        p.delivery = { elapsed: 0, duration: s.region.biome === 'forest' ? 16 : s.region.id === 'pilbara' ? 20 : 12 };
+        p.costs.materials += 720 * s.region.payout / 100; p.ordered++;
+        projectLog(s, 'Materials ordered: six pipe lengths, 2 m3 bedding, 8 m3 selected fill.'); return true;
+    }
+    function fillCells(s, section, targetDepth) {
+        const cells = [], stride = TERRAIN.segments + 1, spacing = TERRAIN.size / TERRAIN.segments, half = TERRAIN.size / 2;
+        const length = Math.max(1.42, 1.3 * s.fleet.scale), width = .78 * s.fleet.scale;
+        const x0 = Math.max(0, Math.floor((section.x - length + half) / spacing)), x1 = Math.min(TERRAIN.segments, Math.ceil((section.x + length + half) / spacing));
+        const z0 = Math.max(0, Math.floor((section.z - width + half) / spacing)), z1 = Math.min(TERRAIN.segments, Math.ceil((section.z + width + half) / spacing));
+        for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
+            const index = z * stride + x, depth = s.terrain.depths[index];
+            if (depth > targetDepth) cells.push({ index, depth, delta: depth - targetDepth });
+        }
+        return cells;
+    }
+    function pipeDisplacement(before, after) {
+        const r = .18, center = -.62;
+        const below = depth => { const y = Math.max(-r, Math.min(r, -depth - center)); return (r * r * (Math.asin(y / r) + Math.PI / 2) + y * Math.sqrt(Math.max(0, r * r - y * y))) * 2; };
+        return below(after) - below(before);
+    }
+    function projectTask(s) {
+        const p = s.project, section = projectSection(s);
+        if (!p || p.complete) return null;
+        if (!p.checked) return 'survey';
+        if (!section) return 'handover';
+        if (Math.hypot(s.machine.x - section.machine.x, s.machine.z - section.machine.z) > .05) return 'align';
+        if (section.accepted) return p.active === p.sections.length - 1 ? 'handover' : 'advance';
+        if (s.bucket) return 'load';
+        if (section.stage === 'excavate') return !trenchStatus(s).ready && trenchStatus(s).min < PIPE.depth - .02 ? 'excavate' : section.water > .03 ? 'pump' : 'formation';
+        return section.stage;
+    }
+    function projectAction(s) {
+        const p = s.project, section = projectSection(s), task = projectTask(s);
+        const labels = { survey: 'Set out and check site', excavate: 'Excavate to formation', load: 'Load spoil truck', pump: 'Pump standing water', formation: 'Inspect formation', bedding: 'Place bedding', pipe: 'Set 2 m pipe', joint: 'Connect pipe joint', inspect: 'Inspect pipe before cover', fill: 'Place backfill lift', compact: 'Compact current lift', align: 'Return to set-out station', advance: 'Move to next station', handover: 'Hand over completed line' };
+        if (p?.work) return p.work.type === 'compact' ? 'Compacting lift ' + (section.lift + 1) : labels[p.work.type] + '...';
+        return labels[task] || 'Project complete';
+    }
+    function startProjectWork(s, type) {
+        const p = s.project, section = projectSection(s);
+        if (!p || p.work || type !== projectTask(s) || !['survey', 'pump', 'formation', 'bedding', 'pipe', 'joint', 'inspect', 'fill', 'compact', 'handover'].includes(type)) return false;
+        if (s.phase !== 'idle' || s.bucket && type !== 'survey' || s.utilities.work || s.crewActivity || s.recovery || s.advance || s.truckRoute.length) return false;
+        let cells = [], volume = 0, displacement = 0, material = null;
+        if (type === 'bedding' || type === 'fill') {
+            const depth = type === 'bedding' ? .8 : Math.max(0, .8 - (section.lift + 1) * .2);
+            cells = fillCells(s, section, depth);
+            volume = cells.reduce((total, cell) => total + cell.delta, 0) * (TERRAIN.size / TERRAIN.segments) ** 2;
+            displacement = type === 'fill' ? pipeDisplacement(.8 - section.lift * .2, depth) : 0;
+            material = type === 'bedding' ? 'bedding' : 'fill';
+        } else if (type === 'pipe') { material = 'pipe'; volume = 1; }
+        const needed = Math.max(0, volume - displacement);
+        if (material && p.inventory[material] + 1e-6 < needed) {
+            if (!p.delivery) orderMaterials(s);
+            s.message = 'Waiting for ' + material + '. Delivery in ' + Math.ceil(p.delivery.duration - p.delivery.elapsed) + ' s. Your action is queued.';
+            return false;
+        }
+        if (material) p.inventory[material] -= needed;
+        const duration = ({ survey: 4, pump: 5, formation: 3, bedding: 4, pipe: 4, joint: 3, inspect: 3, fill: 4, compact: 2.5, handover: 4 })[type] * PROJECT_METHODS[p.method].duration;
+        p.work = { type, target: { ...section, y: -.62, length: 2 }, elapsed: 0, duration, cells, volume: type === 'pipe' ? 0 : volume, displacement, applied: 0, materialVolume: material && type !== 'pipe' ? needed : 0 };
+        s.cut = null; setDrive(s, 0, 0); s.steer = 0; s.safetyStop = s.clearingCrew = false; s.operationQueued = false; s.operateHeld = false;
+        projectLog(s, projectAction(s)); return true;
+    }
+    function stepProject(s, dt, crewReady) {
+        const p = s.project; if (!p || p.complete) return;
+        p.elapsed += dt; p.costs.plant += dt / 60 * (28 + s.fleet.scale * 9 + (p.pumping ? 4 : 0));
+        if (p.delivery) {
+            p.delivery.elapsed += dt;
+            if (p.delivery.elapsed >= p.delivery.duration) { p.inventory.pipe += 6; p.inventory.bedding += 2; p.inventory.fill += 8; p.delivered++; p.delivery = null; projectLog(s, 'Delivery received. Pipe, bedding and selected fill available.'); }
+        }
+        const work = p.work, section = projectSection(s); if (!work) return;
+        if (crewReady || ['survey', 'pump', 'handover'].includes(work.type)) work.elapsed += dt;
+        const progress = Math.min(1, work.elapsed / work.duration), delta = progress - work.applied;
+        if (delta > 0 && work.cells.length) {
+            for (const cell of work.cells) s.terrain.depths[cell.index] = cell.depth - cell.delta * progress;
+            p.filledVolume += work.volume * delta; p.materialPlaced += work.materialVolume * delta; p.pipeVolume += work.displacement * delta;
+            s.terrain.revision++; work.applied = progress;
+        }
+        if (progress < 1) return;
+        const type = work.type;
+        if (type === 'survey') { p.checked = true; projectLog(s, 'Scenario briefing complete: line set out, utility conflicts reviewed, access and ground controls planned.'); }
+        if (type === 'pump') { section.water = 0; p.pumping = true; projectLog(s, 'Standing water removed. Pump remains running for this wet-ground scenario.'); }
+        if (type === 'formation') { section.stage = 'bedding'; section.formation = trenchStatus(s).min; projectLog(s, 'Formation checked before bedding.'); }
+        if (type === 'bedding') { section.stage = 'pipe'; section.bedded = true; projectLog(s, 'Bedding placed. Pipe stock is ready for the next operation.'); }
+        if (type === 'pipe') {
+            section.pipeIndex = s.utilities.pipes.length; s.utilities.pipes.push({ x: section.x, z: section.z, y: -.62, heading: 0, length: 2, buried: false });
+            section.stage = p.active ? 'joint' : 'inspect'; projectLog(s, '2 m pipe set on the prepared bedding.');
+        }
+        if (type === 'joint') {
+            const a = p.sections[p.active - 1], b = section;
+            s.utilities.joints.push({ key: a.pipeIndex + ':' + b.pipeIndex, x: (a.x + b.x) / 2, z: b.z, y: -.62, heading: 0 });
+            section.stage = 'inspect'; projectLog(s, 'Joint connected. Inspection required before covering.');
+        }
+        if (type === 'inspect') { section.inspected = true; section.stage = 'fill'; projectLog(s, 'Pre-cover check recorded: bedding, pipe alignment and connection.'); }
+        if (type === 'fill') { section.stage = 'compact'; section.passes = 0; section.filled = .2 * (section.lift + 1); projectLog(s, 'Lift ' + (section.lift + 1) + ' placed. Compact before adding another lift.'); }
+        if (type === 'compact') {
+            section.passes++;
+            const required = PROJECT_METHODS[p.method].passes + (s.region.biome === 'forest' ? 1 : 0);
+            if (section.passes >= required) {
+                section.lift++; section.stage = section.lift === 4 ? 'accepted' : 'fill';
+                if (section.lift === 4) { section.accepted = true; s.utilities.pipes[section.pipeIndex].buried = true; p.earned += 600; s.skills.joiner += 12; projectLog(s, 'Station ' + p.active * 2 + '-' + (p.active * 2 + 2) + ' m accepted. Four lifts completed.'); }
+                else projectLog(s, 'Lift compacted. Ready for the next layer.');
+            } else projectLog(s, 'Compaction pass ' + section.passes + ' / ' + required + ' on lift ' + (section.lift + 1) + '.');
+        }
+        if (type === 'handover') { p.complete = true; s.status = 'won'; s.event++; projectLog(s, '12 m line handed over. Six inspections and 24 compacted lifts recorded.'); }
+        p.work = null; s.cut = null;
+    }
+    function serviceProject(s) {
+        const p = s.project, section = projectSection(s), task = projectTask(s);
+        if (!p || p.complete) return false;
+        if (p.work) return true;
+        if (task === 'align') { if (s.phase === 'idle' && !s.recovery) s.advance = { ...section.machine }; return true; }
+        if (task === 'advance') {
+            if (s.phase !== 'idle' || s.advance || s.recovery) return true;
+            p.active++; s.advance = { ...projectSection(s).machine }; s.message = 'Moving one pipe length along the set-out line.'; return true;
+        }
+        if (task === 'excavate' || task === 'load') return false;
+        startProjectWork(s, task); return true;
+    }
     function createState(level = 0, practice = false, previous = null, regionId, fleetId) {
         const region = regionById(regionId || previous?.region.id || 'utah');
         const fleetKey = FLEETS[fleetId] ? fleetId : previous?.region.id === region.id ? previous.fleetId : region.fleet;
@@ -291,7 +448,7 @@
         const contract = { ...base, target: base.target / 20 * fleet.capacity, seconds: Math.round(base.seconds * region.time) };
         return {
             region, fleet, fleetId: fleetKey, level, practice, contract,
-            _savedAt: previous?._savedAt,
+            _savedAt: previous?._savedAt, project: previous?.project || null,
             status: 'ready', phase: 'idle', phaseTime: 0, elapsed: 0, charge: 0,
             bucket: (previous?.bucket || 0) + (previous?.phase === 'digging' ? previous.pendingPayload * previous.cut.applied : 0), truck: previous?.truck || 0, truckState: previous?.truckState || 'waiting', truckTime: previous?.truckTime || 0,
             hauled: 0, excavated: 0, digs: 0, perfect: 0, streak: 0, bestStreak: 0,
@@ -324,6 +481,7 @@
     function start(s) { if (s.status === 'ready') s.status = 'playing'; }
     function meter(s) { const n = (s.charge % timingPeriod(s)) / timingPeriod(s); return n <= .5 ? n * 2 : 2 - n * 2; }
     function press(s) {
+        if (s.project && !s.project.complete && !['excavate', 'load'].includes(projectTask(s))) return false;
         if (s.status !== 'playing' || s.phase !== 'idle' || s.utilities.work || s.crewActivity || s.recovery || s.advance || s.drive.x || s.drive.z || s.steer || Math.abs(s.targetHeading - s.machine.heading) > .02) return false;
         if (s.safetyStop) return false;
         if (s.crew.some(person => Math.hypot(person.x - s.machine.x, person.z - s.machine.z) < 6.8 * s.fleet.scale)) { stopForCrew(s); return false; }
@@ -387,7 +545,7 @@
         for (const side of [s.haulSide, -s.haulSide]) {
             const probe = { ...s, haulSide: side, truckRoute: [], truckState: 'waiting' }, pad = truckPosition(probe);
             const exit = { x: pad.x + 38 * Math.cos(s.machine.heading), z: pad.z - 38 * Math.sin(s.machine.heading) };
-            if ([...s.stockpiles, ...s.utilities.pipes].some(p => truckPipeOverlap(pad.x, pad.z, s.machine.heading, p) > 0)) continue;
+            if ([...s.stockpiles, ...s.utilities.pipes.filter(p => !p.buried)].some(p => truckPipeOverlap(pad.x, pad.z, s.machine.heading, p) > 0)) continue;
             if (truckPathClear(probe, pad, exit)) return side;
         }
         return 0;
@@ -435,6 +593,8 @@
     }
     function servicePrimary(s, dt = 0) {
         if (s.status !== 'playing' || !(s.primaryHeld || s.operationQueued) || s.recovery) return;
+        if (s.project?.work) return;
+        if (s.project && !s.utilities.work && !['excavate', 'load', 'advance', 'align'].includes(projectTask(s)) && s.phase === 'idle' && !s.advance && !s.crewActivity) { serviceProject(s); return; }
         if (s.utilities.work || s.crewActivity) { s.operationWait = 0; s.message = 'Next action queued. Waiting for the crew to finish.'; return; }
         // A crew/truck overlap can repeatedly trigger the same stop even after
         // everyone reaches their waiting spot. Bound that wait with arcade recovery.
@@ -448,6 +608,7 @@
         if (s.phase !== 'idle' || s.advance || Math.abs(s.targetHeading - s.machine.heading) > .02) return;
         if (s.haulBlocked || s.truckParked) { startRecovery(s, false); return; }
         if (s.truckRoute.length) { s.message = 'Next action queued. Truck moving to the loading side.'; return; }
+        if (serviceProject(s)) return;
         if (!s.bucket && !availableCut(s)) { nextCut(s); return; }
         if (s.bucket && s.truckState !== 'waiting') { s.message = 'Load queued. Waiting for the haul unit to return.'; return; }
         if (press(s)) {
@@ -480,6 +641,7 @@
         if (s.status === 'lost') return 'New shift / keep site';
         if (s.status === 'won') return s.level === 2 ? 'Choose next site' : 'Next contract';
         if (s.recovery) return 'Recovering spread...';
+        if (s.project?.work) return projectAction(s);
         if (s.safetyStop) return s.clearingCrew ? 'Crew clearing...' : 'Clear crew and continue';
         if (s.utilities.work || s.crewActivity) return s.operationQueued ? 'Next action queued' : 'Queue next action';
         if (s.phase === 'charging') return 'Release to dig';
@@ -489,6 +651,7 @@
         if (s.haulBlocked || s.truckParked) return 'Recover truck and continue';
         if (s.truckRoute.length) return 'Queue next action';
         if (s.bucket) return s.truckState === 'waiting' ? 'Load truck' : 'Queue load';
+        if (s.project && !s.project.complete) return projectAction(s);
         const point = bucketPosition(s);
         if (cutObstructed(s, point) || s.alignment && trenchStatus(s).min >= PIPE.depth - .02 || groundDepth(s, point.x, point.z) >= TERRAIN.maxDepth - .02) return 'Continue to next cut';
         return 'Hold to dig';
@@ -513,6 +676,7 @@
             s.fuel += d / 3600 * engine(s).fuel * (working ? 1 : .25);
             s.energy = Math.max(0, s.energy - d / (working || s.utilities.work ? 6 : 30));
             const crewReady = updateCrew(s, d);
+            stepProject(s, d, crewReady);
             if (s.recovery) {
                 s.recovery.elapsed += d;
                 if (s.recovery.elapsed >= s.recovery.duration) {
@@ -532,7 +696,7 @@
                     s.crewActivity = null; s.message = activity.type === 'lunch' ? 'Crew: Lunch finished. Rested and ready.' : 'Crew drill complete. Experience saved; resume when ready.';
                 }
             }
-            if (!s.utilities.work && !s.clearingCrew) {
+            if (!s.utilities.work && !s.project?.work && !s.clearingCrew) {
                 const traveling = s.drive.x || s.drive.z || s.advance || Math.abs(s.targetHeading - s.machine.heading) > .02;
                 const radius = (s.phase !== 'idle' ? 6.8 : traveling ? 3.8 : 0) * s.fleet.scale;
                 if (radius && s.crew.some(person => Math.hypot(person.x - s.machine.x, person.z - s.machine.z) < radius)) stopForCrew(s);
@@ -569,7 +733,7 @@
                 if (s.advance && length <= speed * d) { s.advance = null; s.message = 'Aligned for the next section. Hold Space to dig.'; }
             }
             const target = s.truckRoute[0] || (s.truckParked ? s.truckPose : truckPosition(s, s.truckTime + d));
-            const truckCanMove = !s.safetyStop && !s.recovery && moveTruck(s, target, d);
+            const truckCanMove = !s.safetyStop && !s.recovery && !s.project?.work && moveTruck(s, target, d);
             if (s.truckRoute.length && Math.hypot(s.truckPose.x - target.x, s.truckPose.z - target.z) < .05) s.truckRoute.shift();
             if (truckCanMove && !s.truckRoute.length && s.truckState !== 'waiting') {
                 s.truckTime += d;
@@ -604,6 +768,7 @@
                     s.event++; s.phase = 'returning'; s.phaseTime = 0;
                     if (s.truck >= s.fleet.capacity - .00001) {
                         s.truck = s.fleet.capacity; s.hauled += s.fleet.capacity; s.terrain.dispatched += s.fleet.capacity; s.credits += s.region.payout;
+                        if (s.project) s.project.costs.haul += 35 * s.region.payout / 100;
                         s.truckState = 'hauling'; s.truckTime = 0;
                         s.message = s.fleet.capacity + ' tonnes dispatched. +$' + s.region.payout + '. Next truck inbound.';
                     } else s.message = 'Load placed. ' + s.truck.toFixed(1) + ' / ' + s.fleet.capacity + ' t.';
@@ -616,5 +781,5 @@
             if (s.status !== 'playing') { s.operateHeld = false; s.primaryHeld = false; s.operationQueued = false; s.history.push({ level: s.level, result: s.status, hauled: s.hauled, elapsed: s.elapsed }); }
         }
     }
-    return { REGIONS, FLEETS, SOILS, CONTRACTS, TERRAIN, PIPE, THROTTLES, engine, setThrottle, crewLevel, crewTag, crewActivity, crewHome, truckPosition, truckPathClear, switchTruckSide, clearCrew, setPlan, planSections, regionById, soil, bucketCapacity, bucketPosition, groundDepth, setDrive, canTravel, turn, backUp, trenchStatus, pipeCandidate, connectionCandidate, startPipeWork, digDuration, haulDuration, timingPeriod, createState, start, press, release, cancelCharge, setOperateHeld, setPrimaryHeld, primaryAction, pause, buy, step, meter };
+    return { PROJECT_STAGES, PROJECT_METHODS, projectSection, startProject, projectCost, setProjectMethod, orderMaterials, projectTask, projectAction, startProjectWork, REGIONS, FLEETS, SOILS, CONTRACTS, TERRAIN, PIPE, THROTTLES, engine, setThrottle, crewLevel, crewTag, crewActivity, crewHome, truckPosition, truckPathClear, switchTruckSide, clearCrew, setPlan, planSections, regionById, soil, bucketCapacity, bucketPosition, groundDepth, setDrive, canTravel, turn, backUp, trenchStatus, pipeCandidate, connectionCandidate, startPipeWork, digDuration, haulDuration, timingPeriod, createState, start, press, release, cancelCharge, setOperateHeld, setPrimaryHeld, primaryAction, pause, buy, step, meter };
 });

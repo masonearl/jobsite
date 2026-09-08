@@ -1,6 +1,6 @@
 # Jobsite
 
-A browser construction game from [openmud](https://openmud.ai). Choose a region, operate an excavator, cut a persistent trench, load trucks, and bring in a pipe crew.
+A browser construction game from [openmud](https://openmud.ai). Choose a region, operate an excavator, take a utility line from excavation to inspected pipe, compacted backfill, and handover. Or explore the site freely with an excavator, trucks, and a pipe crew.
 
 **[Play Jobsite](https://openmud.ai/jobsite)** · **[How to play](https://openmud.ai/jobsite#how-to-play)** · **[Report an issue](https://github.com/masonearl/jobsite/issues)**
 
@@ -21,6 +21,20 @@ python3 -m http.server 8000 --directory web
 Open **http://localhost:8000**. Use an HTTP server rather than opening the HTML file directly: the game loads JavaScript modules and map data. A browser with WebGL is required.
 
 There is no build step, account, API key, backend service, or package install needed to play. Three.js is included locally. This standalone edition does not include the parent site's analytics or navigation scripts.
+
+## Build a utility line
+
+Choose a region and equipment spread, then select **Build a utility line**. This guided 12 m project works through six 2 m stations:
+
+1. Set out the line and complete the scenario briefing.
+2. Excavate to formation and load the spoil truck. Pump standing water on wet-ground sites.
+3. Check formation, place bedding, set pipe, connect joints, and inspect before covering.
+4. Place four 0.2 m backfill lifts, compacting each before adding the next.
+5. Accept each section, advance along the line, and hand over the completed project.
+
+Space or the gold button requests the next operation; hold to continue. The machine follows the planned stations in this mode. Open **Crew & upgrades** in expanded view to see the resource desk. Order pipe, bedding and fill before stocks run low; shortages queue a delivery. Delivery travel time and wet-ground conditions vary by region. Compare Careful, Steady and Fast work methods: faster placement requires more compaction passes in this scenario.
+
+The field record tracks accepted length, deliveries, inventory, imported fill, scenario earnings and material/plant/haul costs. Backfill visibly restores the terrain, and pipe remains below the finished surface. These are learning presets, not compaction specifications or estimating rates. Choose **Mobilize to site** for the existing earthworks controls below. A saved utility project resumes from either entry point for that spread.
 
 ## Controls
 
@@ -43,6 +57,7 @@ Touch controls are available in the scene. In expanded view, open **Upgrades** f
 ## What is implemented
 
 - Six regional scenarios with different landscapes, materials, hauling times, and equipment presets.
+- A complete guided utility-line workflow with material logistics, pumping, inspections, incremental backfill, compaction and handover.
 - Three equipment spreads, three contracts per region, and free digging without a clock.
 - Articulated equipment, a digging/loading cycle, trucks, and a visible pipe crew.
 - Terrain deformation at each bucket location. Cuts and installed pipe remain as you move and carry into the next contract on that site.
@@ -52,7 +67,7 @@ Touch controls are available in the scene. In expanded view, open **Upgrades** f
 - Equipment/worker interlocks, persistent trench and pipe obstacles, and device saves.
 - A construction learning guide and fullscreen controls.
 
-The regions are illustrative presets with generated environments. Terrain, capacities, time, and prices are simplified game values, not surveyed conditions, estimating data, or equipment training. Each region and fleet keeps its own local device save, including active excavation, pipes, vehicles, cash, upgrades, crew skills, fuel and shift history. Reloaded shifts resume paused. Changing shifts preserves the work. Saves include a previous-good backup; unsupported saves are retained, and stale tabs cannot overwrite a newer saved job. Saves stay in this browser profile and do not sync between devices.
+The regions are illustrative presets with generated environments. Terrain, capacities, time, and prices are simplified game values, not surveyed conditions, estimating data, or equipment training. Each region and fleet keeps its own local device save, including active excavation, pipes, vehicles, cash, upgrades, crew skills, fuel, shift history and utility-project progress. Utility projects use version 2 saves; existing version 1 earthworks saves remain readable. Reloaded shifts resume paused. Changing shifts preserves the work. Saves include a previous-good backup; unsupported saves are retained, and stale tabs cannot overwrite a newer saved job. Saves stay in this browser profile and do not sync between devices.
 
 ## Development
 
@@ -62,7 +77,7 @@ Run the simulation checks with Node.js 22 or later:
 npm test
 ```
 
-To check the browser input path, run `python3 scripts/serve-jobsite-input-check.py` and open `http://127.0.0.1:4181/__input-check`. Select **Run input checks**. These eleven real-page checks cover saved-site Resume, sustained Space past pipe grade, repeat and release, toolbar focus, guide/world return, typing, crew drills, queued taps, blocked trucks, crew stops and ended shifts. Timed holds use synthetic keyboard events. The fixture uses in-memory saves and does not modify your browser's saved jobs. Also check physical Space keypresses after Resume and fullscreen in your target browser.
+To check the browser input path, run `python3 scripts/serve-jobsite-input-check.py` and open `http://127.0.0.1:4181/__input-check`. Select **Run input checks**. These eleven real-page checks cover saved-site Resume, sustained Space past pipe grade, repeat and release, toolbar focus, guide/world return, typing, crew drills, queued taps, blocked trucks, crew stops and ended shifts. Timed holds use synthetic keyboard events. The fixture uses in-memory saves and does not modify your browser's saved jobs. Open `http://127.0.0.1:4181/__project-check` for six additional browser checks covering project launch, controls, guide/map return, a full handover, post-completion input and a saved partial backfill. The full-project browser check uses a local-only 12x simulation clock. Also check physical Space keypresses after Resume and fullscreen in your target browser.
 
 - `web/index.html`: game and learning guide.
 - `web/assets/js/jobsite-sim.js`: deterministic production, movement, terrain, and pipe-work state.
@@ -71,6 +86,8 @@ To check the browser input path, run `python3 scripts/serve-jobsite-input-check.
 - `web/assets/js/jobsite.js`: browser controls, screens, audio, and persistence.
 - `web/assets/css/jobsite.css`: responsive UI.
 - `tests/jobsite-sim.test.js`: simulation and construction-flow checks.
+- `tests/jobsite-project.test.js`: all 18 region/fleet combinations, material and terrain balances, stage prerequisites, pumping, deliveries, work methods and save/resume.
+- `tests/jobsite-save.test.js`: save validation, backups and persistence regressions.
 
 The live demo is hosted within openmud.ai; this repository is the standalone game. Static hosts can serve `web` as the site root. A Vercel configuration is included.
 
@@ -78,7 +95,7 @@ The live demo is hosted within openmud.ai; this repository is the standalone gam
 
 The renderer is Three.js r170, capped at 30 frames per second and one device pixel per CSS pixel, with a 1024-pixel shadow map. The 56 m terrain grid has 0.25 m spacing (50,625 vertices). Excavation updates only the affected vertices and nearby normals. Rendering stops when the page is hidden or the map/guide is open, and settled paused scenes draw only when needed. There is no physics engine or server simulation.
 
-Worker zones and vehicle obstacles use simple geometric checks. Blocked trucks stop until the primary action requests recovery. Recovery is a short equipment reset, not a rigid-body rollover or tow simulation. Switching loading sides uses a route around the far end of existing excavation; it does not perform a full road-network route search. The game currently models open cuts and exposed pipes; backfilling is not implemented. Machine capacity, density, fuel and time are explicit game presets. Bank volume is integrated from the height field; mass equals removed volume times the current bite density. Loose-volume swell is not modeled.
+Worker zones and vehicle obstacles use simple geometric checks. Blocked trucks stop until the primary action requests recovery. Recovery is a short equipment reset, not a rigid-body rollover or tow simulation. Switching loading sides uses a route around the far end of existing excavation; it does not perform a full road-network route search. Utility projects restore the height field with bedding and compacted backfill lifts. Pipe displacement is deducted from imported fill quantities; gross excavated volume and mass remain separate from the current open excavation. The pipe line uses a fixed guided corridor, not a civil-design solver. Compaction uses prescribed passes rather than soil mechanics or field density tests. Machine capacity, density, fuel and time are explicit game presets. Bank volume is integrated from the height field; mass equals removed volume times the current bite density. Loose-volume swell is not modeled.
 
 Performance depends on the GPU, browser and number of placed pipes. Operator notes show CPU render-submission time and draw calls; this does not measure GPU time or total browser memory. Device saves are subject to browser storage availability and limits.
 

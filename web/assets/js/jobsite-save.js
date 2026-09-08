@@ -13,11 +13,11 @@
             terrain: { ...state.terrain, depths: cells }, operateHeld: false, primaryHeld: false, operationQueued: false, operationWait: 0, recovery: null, drive: { x: 0, z: 0 }, steer: 0, advance: null,
             targetHeading: state.machine.heading, status: state.status === 'playing' ? 'paused' : state.status };
         if (copy.phase === 'charging') { copy.phase = 'idle'; copy.charge = 0; }
-        return JSON.stringify({ version: 1, savedAt, state: copy });
+        return JSON.stringify({ version: state.project ? 2 : 1, savedAt, state: copy });
     }
     function decode(raw, region, fleet) {
         const envelope = JSON.parse(raw);
-        if (envelope.version !== 1) throw new Error('Unsupported save version');
+        if (![1, 2].includes(envelope.version)) throw new Error('Unsupported save version');
         const data = envelope.state;
         if (!data || data.region !== region || data.fleet !== fleet || !Sim.FLEETS[fleet] || !Sim.REGIONS.some(r => r.id === region)) throw new Error('Different job');
         const state = Sim.createState(data.level, data.practice, null, region, fleet);
@@ -37,6 +37,16 @@
         if (restored.status === 'playing') restored.status = 'paused';
         if (restored.phase === 'charging') { restored.phase = 'idle'; restored.charge = 0; }
         if (restored.phase === 'digging' && (!restored.cut || !Array.isArray(restored.cut.cells))) throw new Error('Invalid active cut');
+        if (restored.project) {
+            const p = restored.project;
+            if (!Array.isArray(p.sections) || p.sections.length !== 6 || !Number.isInteger(p.active) || p.active < 0 || p.active > 5 || !Sim.PROJECT_METHODS[p.method]) throw new Error('Invalid project');
+            for (const section of p.sections) {
+                if (!['excavate', 'bedding', 'pipe', 'joint', 'inspect', 'fill', 'compact', 'accepted'].includes(section.stage) || !Number.isInteger(section.lift) || section.lift < 0 || section.lift > 4 || ![section.x, section.z, section.machine?.x, section.machine?.z].every(Number.isFinite)) throw new Error('Invalid section');
+            }
+            for (const value of [...Object.values(p.inventory || {}), ...Object.values(p.costs || {})]) if (!Number.isFinite(value) || value < -1e-5) throw new Error('Invalid project quantities');
+            if (!p.inventory || !['pipe', 'bedding', 'fill'].every(key => Number.isFinite(p.inventory[key])) || !p.costs || !['materials', 'plant', 'haul'].every(key => Number.isFinite(p.costs[key])) || !Array.isArray(p.log)) throw new Error('Invalid project records');
+            if (p.work && (!Array.isArray(p.work.cells) || p.work.cells.some(cell => !Number.isInteger(cell.index) || cell.index < 0 || cell.index >= terrain.depths.length || !Number.isFinite(cell.depth) || !Number.isFinite(cell.delta)))) throw new Error('Invalid active backfill');
+        }
         return restored;
     }
     function read(storage, region, fleet) {
@@ -45,7 +55,7 @@
         try {
             raw = storage.getItem(id);
             if (!raw) return { state: null };
-            try { if (JSON.parse(raw).version > 1) return { state: null, blocked: true }; } catch (_) { /* Try the previous-good copy below. */ }
+            try { if (JSON.parse(raw).version > 2) return { state: null, blocked: true }; } catch (_) { /* Try the previous-good copy below. */ }
             try { return { state: decode(raw, region, fleet) }; }
             catch (_) {
                 const backup = storage.getItem(id + ':backup');
@@ -65,7 +75,7 @@
             }
             catch (error) {
                 if (error.message.startsWith('Site changed')) throw error;
-                try { if (JSON.parse(old).version > 1) throw error; } catch (parseError) { if (!(parseError instanceof SyntaxError)) throw parseError; }
+                try { if (JSON.parse(old).version > 2) throw error; } catch (parseError) { if (!(parseError instanceof SyntaxError)) throw parseError; }
                 const backup = storage.getItem(id + ':backup');
                 if (!backup || storage.getItem(id + ':unreadable')) throw error;
                 decode(backup, state.region.id, state.fleetId);
