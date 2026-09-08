@@ -26,7 +26,8 @@ There is no build step, account, API key, backend service, or package install ne
 
 - **Up:** drive forward toward the bucket. **Down:** reverse. Release to stop.
 - **Left / Right:** turn the machine. Trench assist makes a quarter turn per press and stops cuts at the 0.90 m pipe bed; turn it off for free steering and deeper cuts.
-- **Space:** hold to repeat steady dig/load cycles at 80% bucket capacity. Release in the marked zone for a full single bite and cash bonus. Release stops new cycles; the current animation finishes. Resume and game controls return keyboard focus to the scene. Tab-focused buttons and text fields keep their normal keyboard behavior.
+- **Space:** start or resume, dig, load, and advance to the next cut. Hold Space or the gold button to keep working at 80% bucket capacity. Release in the marked zone for a full single bite and cash bonus. Tap during a cycle to queue one next action. Space clears crew stops and recovers blocked or parked trucks. Release stops repeating; the current action finishes. Space works across game toolbar controls; Enter activates the focused control. Text fields and the guide keep normal keyboard behavior.
+- **Recovery:** blocked trucks move to a clear loading lane; a finished or obstructed cut advances to fresh ground. At the boundary, the spread relocates to a usable pad. Recovery preserves excavated terrain, installed pipe, payload and earnings. Repeated crew/truck overlaps trigger recovery after a bounded wait. Pausing, leaving the game or reloading clears queued input.
 - **Back up 2 m:** move one pipe length in reverse while keeping the trench aligned.
 - **Install 2 m pipe:** available after the bed is within the target depth tolerance and the bucket is empty. Install an adjoining section, then **Connect joint**.
 - **Site plan:** show a saved pipe-corridor layout over the actual terrain. Planned, on-grade and installed sections have different colors. **Plan from bucket** aligns a new plan with the current machine heading.
@@ -61,7 +62,7 @@ Run the simulation checks with Node.js 22 or later:
 npm test
 ```
 
-To check the browser input path, run `python3 scripts/serve-jobsite-input-check.py` and open `http://127.0.0.1:4181/__input-check`. Select **Run input checks**. These six real-page checks cover saved-site Resume, sustained Space, repeat and release, toolbar focus, guide/world return, typing, crew drills and at-grade feedback. Timed holds use synthetic keyboard events. The fixture uses in-memory saves and does not modify your browser's saved jobs. Also check physical Space keypresses after Resume and fullscreen in your target browser.
+To check the browser input path, run `python3 scripts/serve-jobsite-input-check.py` and open `http://127.0.0.1:4181/__input-check`. Select **Run input checks**. These eleven real-page checks cover saved-site Resume, sustained Space past pipe grade, repeat and release, toolbar focus, guide/world return, typing, crew drills, queued taps, blocked trucks, crew stops and ended shifts. Timed holds use synthetic keyboard events. The fixture uses in-memory saves and does not modify your browser's saved jobs. Also check physical Space keypresses after Resume and fullscreen in your target browser.
 
 - `web/index.html`: game and learning guide.
 - `web/assets/js/jobsite-sim.js`: deterministic production, movement, terrain, and pipe-work state.
@@ -77,7 +78,7 @@ The live demo is hosted within openmud.ai; this repository is the standalone gam
 
 The renderer is Three.js r170, capped at 30 frames per second and one device pixel per CSS pixel, with a 1024-pixel shadow map. The 56 m terrain grid has 0.25 m spacing (50,625 vertices). Excavation updates only the affected vertices and nearby normals. Rendering stops when the page is hidden or the map/guide is open, and settled paused scenes draw only when needed. There is no physics engine or server simulation.
 
-Worker zones and vehicle obstacles use simple geometric checks. Blocked trucks stop. Switching loading sides uses a route around the far end of existing excavation; it does not perform a full road-network route search. The game currently models open cuts and exposed pipes; backfilling is not implemented. Machine capacity, density, fuel and time are explicit game presets. Bank volume is integrated from the height field; mass equals removed volume times the current bite density. Loose-volume swell is not modeled.
+Worker zones and vehicle obstacles use simple geometric checks. Blocked trucks stop until the primary action requests recovery. Recovery is a short equipment reset, not a rigid-body rollover or tow simulation. Switching loading sides uses a route around the far end of existing excavation; it does not perform a full road-network route search. The game currently models open cuts and exposed pipes; backfilling is not implemented. Machine capacity, density, fuel and time are explicit game presets. Bank volume is integrated from the height field; mass equals removed volume times the current bite density. Loose-volume swell is not modeled.
 
 Performance depends on the GPU, browser and number of placed pipes. Operator notes show CPU render-submission time and draw calls; this does not measure GPU time or total browser memory. Device saves are subject to browser storage availability and limits.
 

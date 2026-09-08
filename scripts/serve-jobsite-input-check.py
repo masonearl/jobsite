@@ -27,8 +27,18 @@ class Handler(SimpleHTTPRequestHandler):
         bootstrap = "const values=new Map();Object.defineProperty(window,'localStorage',{value:{getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,String(value)),removeItem:key=>values.delete(key)}});"
         html = html.replace('<head>', '<head><script>' + bootstrap + '</script>')
         html = html.replace('<script src="/assets/js/posthog.js"></script>', '')
-        if parse_qs(url.query).get('saved') == ['true']:
+        query = parse_qs(url.query)
+        if query.get('saved') == ['true']:
             seed = 'const s=JobsiteSim.createState(0,true);JobsiteSim.start(s);JobsiteSim.setOperateHeld(s,true);JobsiteSim.step(s,1.5);JobsiteSim.setOperateHeld(s,false);JobsiteSim.step(s,4);JobsiteSim.backUp(s);JobsiteSim.step(s,2);JobsiteSave.write(localStorage,s);'
+            scenarios = {
+                'crew': 's.crew[0]={x:s.machine.x,z:s.machine.z};s.safetyStop=true;',
+                'truck': 's.machine.x=-5.4;s.truckPose=JobsiteSim.truckPosition(s);s.truckParked=true;s.haulBlocked=true;s.crew=s.crew.map((_,i)=>JobsiteSim.crewHome(s,i));',
+                'overlap': 's.truckPose=JobsiteSim.crewHome(s,0);s.truckParked=true;',
+                'grade': 's.machine.x=0;JobsiteSim.setOperateHeld(s,true);JobsiteSim.step(s,20);JobsiteSim.setOperateHeld(s,false);',
+                'ended': "s.status='lost';",
+            }
+            setup = scenarios.get(query.get('scenario', [''])[0], '')
+            seed = seed.replace('JobsiteSave.write(localStorage,s);', setup + 'JobsiteSave.write(localStorage,s);')
             html = html.replace('<script src="/assets/js/jobsite.js">', '<script>' + seed + '</script><script src="/assets/js/jobsite.js">')
         body = html.encode()
         self.send_response(200)

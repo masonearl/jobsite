@@ -50,7 +50,7 @@
         const length = Math.max(1, Math.hypot(x, z));
         s.drive.x = x / length; s.drive.z = z / length;
     }
-    function canTravel(s) { return s.status === 'playing' && s.phase === 'idle' && !s.utilities.work && !s.safetyStop && !s.crewActivity && !s.truckRoute.length; }
+    function canTravel(s) { return s.status === 'playing' && s.phase === 'idle' && !s.utilities.work && !s.safetyStop && !s.crewActivity && !s.truckRoute.length && !s.recovery; }
     function crewLevel(s, role) { return Math.min(10, 1 + Math.floor((s.skills[role] || 0) / 50)); }
     function crewTag(s, role) { return ({ foreman: 'F', operator: 'Operator ', laborer: 'L', joiner: 'PJ' }[role] || role) + crewLevel(s, role); }
     function setPlan(s) {
@@ -298,6 +298,7 @@
             machine: previous ? { ...previous.machine } : { x: 0, z: 0, heading: 0 },
             drive: { x: 0, z: 0 }, terrain: previous?.terrain || createTerrain(), cut: null,
             targetHeading: previous?.machine.heading || 0, steer: 0, alignment: true, advance: null, operateHeld: false,
+            primaryHeld: false, operationQueued: false, operationWait: 0, recovery: null,
             utilities: previous?.utilities || { pipes: [], joints: [], work: null },
             crew: previous?.crew || Array.from({ length: 3 }, (_, i) => ({ x: -4.5 - i * .8, z: 8 })), safetyStop: previous?.safetyStop || false, clearingCrew: previous?.clearingCrew || false,
             truckPose: previous?.truckPose ? { ...previous.truckPose } : { x: .25, z: -6 }, haulBlocked: previous?.haulBlocked || false,
@@ -309,7 +310,7 @@
             credits: previous ? previous.credits : 0,
             upgrades: previous ? { ...previous.upgrades } : { bucket: false, dispatch: false },
             lastQuality: '', lastPayload: 0, pendingPayload: 0, biteSoil: 'earth',
-            event: 0, message: 'Hold Space for repeated dig/load cycles. Trench assist stops at the pipe bed.'
+            event: 0, message: 'Space digs, loads, and moves to the next cut. Hold to keep working; release to stop.'
         };
     }
     function soil(s) { return SOILS[s.region.layers[Math.min(2, Math.floor(s.excavated / s.contract.target * 3))]]; }
@@ -323,7 +324,7 @@
     function start(s) { if (s.status === 'ready') s.status = 'playing'; }
     function meter(s) { const n = (s.charge % timingPeriod(s)) / timingPeriod(s); return n <= .5 ? n * 2 : 2 - n * 2; }
     function press(s) {
-        if (s.status !== 'playing' || s.phase !== 'idle' || s.utilities.work || s.crewActivity || s.advance || s.drive.x || s.drive.z || s.steer || Math.abs(s.targetHeading - s.machine.heading) > .02) return false;
+        if (s.status !== 'playing' || s.phase !== 'idle' || s.utilities.work || s.crewActivity || s.recovery || s.advance || s.drive.x || s.drive.z || s.steer || Math.abs(s.targetHeading - s.machine.heading) > .02) return false;
         if (s.safetyStop) return false;
         if (s.crew.some(person => Math.hypot(person.x - s.machine.x, person.z - s.machine.z) < 6.8 * s.fleet.scale)) { stopForCrew(s); return false; }
         const point = bucketPosition(s);
@@ -370,8 +371,130 @@
             if (cancel) cancelCharge(s); else if (wasHeld) release(s);
         }
     }
+    // The primary action keeps player intent across recoverable stops. Low-level
+    // press/release remain available for deliberate, manually timed operation.
+    function cutObstructed(s, point) {
+        return s.utilities.pipes.some(p => Math.hypot(p.x - point.x, p.z - point.z) < 1.4)
+            || pipeObstacleAt({ ...s, utilities: { pipes: [] } }, point.x, point.z, .9);
+    }
+    function availableCut(s) {
+        const point = bucketPosition(s);
+        if (cutObstructed(s, point)) return false;
+        if (s.alignment && trenchStatus(s).min >= PIPE.depth - .02) return false;
+        return planCut(s, { ...point, heading: s.machine.heading }, bucketCapacity(s)) >= .001;
+    }
+    function loadingSide(s) {
+        for (const side of [s.haulSide, -s.haulSide]) {
+            const probe = { ...s, haulSide: side, truckRoute: [], truckState: 'waiting' }, pad = truckPosition(probe);
+            const exit = { x: pad.x + 38 * Math.cos(s.machine.heading), z: pad.z - 38 * Math.sin(s.machine.heading) };
+            if ([...s.stockpiles, ...s.utilities.pipes].some(p => truckPipeOverlap(pad.x, pad.z, s.machine.heading, p) > 0)) continue;
+            if (truckPathClear(probe, pad, exit)) return side;
+        }
+        return 0;
+    }
+    function recoveryPad(s, moveMachine) {
+        if (!moveMachine) {
+            const side = loadingSide(s);
+            if (side) return { machine: { ...s.machine }, side };
+        }
+        const positions = [];
+        for (let x = -18; x <= 18; x += 2) for (let z = -16; z <= 16; z += 2) positions.push({ x, z });
+        positions.sort((a, b) => Math.hypot(a.x - s.machine.x, a.z - s.machine.z) - Math.hypot(b.x - s.machine.x, b.z - s.machine.z));
+        for (const position of positions) for (const heading of [s.machine.heading, 0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+            const machine = { ...position, heading }, probe = { ...s, machine };
+            if (!stableGround(probe, position.x, position.z) || !availableCut(probe)) continue;
+            const side = loadingSide(probe);
+            if (side) return { machine, side };
+        }
+        return null;
+    }
+    function startRecovery(s, moveMachine) {
+        const pad = recoveryPad(s, moveMachine);
+        if (!pad) { s.operationQueued = false; s.primaryHeld = false; s.message = 'This pad is worked out. Choose another region on the world map.'; return false; }
+        // Recovery can interrupt a stuck cycle. Keep only the soil already removed,
+        // so resetting equipment neither refills the ground nor duplicates a load.
+        if (s.phase === 'digging') { const removed = s.pendingPayload * s.cut.applied; s.bucket += removed; s.excavated += removed; }
+        s.phase = 'idle'; s.phaseTime = 0; s.charge = 0; s.pendingPayload = 0; s.cut = null;
+        s.recovery = { ...pad, elapsed: 0, duration: 1.5 };
+        s.operationWait = 0;
+        setDrive(s, 0, 0); s.advance = null; s.steer = 0; s.operateHeld = false;
+        s.message = moveMachine ? 'Recovery crew moving the spread to fresh ground. Existing cuts and pipe stay in place.' : 'Recovery crew resetting the haul unit on a clear loading lane. Payload stays on board.';
+        return true;
+    }
+    function nextCut(s) {
+        const target = { x: s.machine.x - 2 * Math.cos(s.machine.heading), z: s.machine.z + 2 * Math.sin(s.machine.heading) };
+        const probe = { ...s, machine: { ...s.machine, ...target } };
+        let clear = Math.abs(target.x) <= 18 && Math.abs(target.z) <= 16;
+        for (let i = 1; clear && i <= 10; i++) clear = stableGround(s, s.machine.x + (target.x - s.machine.x) * i / 10, s.machine.z + (target.z - s.machine.z) * i / 10);
+        if (clear && availableCut(probe)) {
+            // A parked or canceled truck route must not prevent the next cut.
+            s.truckRoute = []; s.truckParked = false;
+            return backUp(s);
+        }
+        return startRecovery(s, true);
+    }
+    function servicePrimary(s, dt = 0) {
+        if (s.status !== 'playing' || !(s.primaryHeld || s.operationQueued) || s.recovery) return;
+        if (s.utilities.work || s.crewActivity) { s.operationWait = 0; s.message = 'Next action queued. Waiting for the crew to finish.'; return; }
+        // A crew/truck overlap can repeatedly trigger the same stop even after
+        // everyone reaches their waiting spot. Bound that wait with arcade recovery.
+        s.operationWait = s.safetyStop || s.phase === 'idle' && !s.advance ? s.operationWait + dt : 0;
+        if (s.operationWait >= 8) { startRecovery(s, false); return; }
+        if (s.safetyStop || s.crew.some(p => Math.hypot(p.x - s.machine.x, p.z - s.machine.z) < 6.8 * s.fleet.scale)) {
+            if (!s.clearingCrew) clearCrew(s);
+            s.message = 'Next action queued. Crew clearing the equipment zone.';
+            return;
+        }
+        if (s.phase !== 'idle' || s.advance || Math.abs(s.targetHeading - s.machine.heading) > .02) return;
+        if (s.haulBlocked || s.truckParked) { startRecovery(s, false); return; }
+        if (s.truckRoute.length) { s.message = 'Next action queued. Truck moving to the loading side.'; return; }
+        if (!s.bucket && !availableCut(s)) { nextCut(s); return; }
+        if (s.bucket && s.truckState !== 'waiting') { s.message = 'Load queued. Waiting for the haul unit to return.'; return; }
+        if (press(s)) {
+            s.operationQueued = false; s.operationWait = 0;
+            s.operateHeld = s.primaryHeld;
+            // A tap made during a cycle is one queued action, never a latched hold.
+            if (!s.primaryHeld && s.phase === 'charging') release(s, true);
+        }
+    }
+    function setPrimaryHeld(s, held, cancel = false) {
+        if (!s) return;
+        if (held) {
+            if (s.status === 'ready') start(s);
+            if (s.status === 'paused') pause(s);
+            if (s.status !== 'playing' || s.primaryHeld) return;
+            s.primaryHeld = true; s.operationQueued = true;
+            setDrive(s, 0, 0); s.steer = 0;
+            servicePrimary(s);
+            if (s.operationQueued && !s.recovery && s.phase !== 'idle') s.message = 'Next action queued. The current cycle will finish first.';
+        } else {
+            const wasHeld = s.primaryHeld;
+            s.primaryHeld = false; s.operateHeld = false;
+            if (cancel) { s.operationQueued = false; s.operationWait = 0; cancelCharge(s); }
+            else if (wasHeld && s.phase === 'charging') release(s);
+        }
+    }
+    function primaryAction(s) {
+        if (s.status === 'paused') return 'Resume shift';
+        if (s.status === 'ready') return 'Start shift';
+        if (s.status === 'lost') return 'New shift / keep site';
+        if (s.status === 'won') return s.level === 2 ? 'Choose next site' : 'Next contract';
+        if (s.recovery) return 'Recovering spread...';
+        if (s.safetyStop) return s.clearingCrew ? 'Crew clearing...' : 'Clear crew and continue';
+        if (s.utilities.work || s.crewActivity) return s.operationQueued ? 'Next action queued' : 'Queue next action';
+        if (s.phase === 'charging') return 'Release to dig';
+        if (s.phase !== 'idle') return s.operationQueued ? 'Next action queued' : 'Cycling...';
+        if (s.advance) return 'Moving to next cut...';
+        if (Math.abs(s.targetHeading - s.machine.heading) > .02) return 'Turning...';
+        if (s.haulBlocked || s.truckParked) return 'Recover truck and continue';
+        if (s.truckRoute.length) return 'Queue next action';
+        if (s.bucket) return s.truckState === 'waiting' ? 'Load truck' : 'Queue load';
+        const point = bucketPosition(s);
+        if (cutObstructed(s, point) || s.alignment && trenchStatus(s).min >= PIPE.depth - .02 || groundDepth(s, point.x, point.z) >= TERRAIN.maxDepth - .02) return 'Continue to next cut';
+        return 'Hold to dig';
+    }
     function pause(s) {
-        if (s.status === 'playing') { setOperateHeld(s, false, true); cancelCharge(s); setDrive(s, 0, 0); s.advance = null; s.steer = 0; s.targetHeading = s.machine.heading; s.status = 'paused'; }
+        if (s.status === 'playing') { setPrimaryHeld(s, false, true); setOperateHeld(s, false, true); cancelCharge(s); setDrive(s, 0, 0); s.advance = null; s.steer = 0; s.targetHeading = s.machine.heading; s.status = 'paused'; }
         else if (s.status === 'paused') s.status = 'playing';
     }
     function buy(s, key) {
@@ -390,6 +513,15 @@
             s.fuel += d / 3600 * engine(s).fuel * (working ? 1 : .25);
             s.energy = Math.max(0, s.energy - d / (working || s.utilities.work ? 6 : 30));
             const crewReady = updateCrew(s, d);
+            if (s.recovery) {
+                s.recovery.elapsed += d;
+                if (s.recovery.elapsed >= s.recovery.duration) {
+                    s.machine = { ...s.recovery.machine }; s.targetHeading = s.machine.heading; s.haulSide = s.recovery.side;
+                    s.truckTime = 0; s.truckRoute = []; s.truckParked = false; s.truckHeading = s.machine.heading; s.truckPose = truckPosition(s);
+                    s.crew = s.crew.map((_, i) => crewHome(s, i)); s.safetyStop = false; s.clearingCrew = false; s.haulBlocked = false;
+                    s.recovery = null; s.message = 'Recovery complete. Spread ready; site progress preserved.';
+                }
+            }
             const activity = s.crewActivity;
             if (activity && !s.clearingCrew) {
                 activity.elapsed += d;
@@ -437,7 +569,7 @@
                 if (s.advance && length <= speed * d) { s.advance = null; s.message = 'Aligned for the next section. Hold Space to dig.'; }
             }
             const target = s.truckRoute[0] || (s.truckParked ? s.truckPose : truckPosition(s, s.truckTime + d));
-            const truckCanMove = !s.safetyStop && moveTruck(s, target, d);
+            const truckCanMove = !s.safetyStop && !s.recovery && moveTruck(s, target, d);
             if (s.truckRoute.length && Math.hypot(s.truckPose.x - target.x, s.truckPose.z - target.z) < .05) s.truckRoute.shift();
             if (truckCanMove && !s.truckRoute.length && s.truckState !== 'waiting') {
                 s.truckTime += d;
@@ -448,7 +580,8 @@
                     s.message = s.bucket > 0 ? 'Truck on the pad. Press LOAD.' : 'Truck on the pad. Take your next bite.';
                 }
             }
-            if (s.operateHeld && s.phase === 'idle') press(s);
+            servicePrimary(s, d);
+            if (s.operateHeld && !s.primaryHeld && s.phase === 'idle') press(s);
             if (!s.safetyStop && s.phase === 'charging') {
                 s.charge += d;
                 if (s.operateHeld && s.charge >= (soil(s).window[0] + soil(s).window[1]) / 4 * timingPeriod(s)) release(s, true);
@@ -480,8 +613,8 @@
             }
             if (!s.practice && s.hauled >= s.contract.target) { s.status = 'won'; s.event++; }
             else if (!s.practice && s.elapsed >= s.contract.seconds) { s.elapsed = s.contract.seconds; s.status = 'lost'; cancelCharge(s); s.event++; }
-            if (s.status !== 'playing') { s.operateHeld = false; s.history.push({ level: s.level, result: s.status, hauled: s.hauled, elapsed: s.elapsed }); }
+            if (s.status !== 'playing') { s.operateHeld = false; s.primaryHeld = false; s.operationQueued = false; s.history.push({ level: s.level, result: s.status, hauled: s.hauled, elapsed: s.elapsed }); }
         }
     }
-    return { REGIONS, FLEETS, SOILS, CONTRACTS, TERRAIN, PIPE, THROTTLES, engine, setThrottle, crewLevel, crewTag, crewActivity, crewHome, truckPosition, truckPathClear, switchTruckSide, clearCrew, setPlan, planSections, regionById, soil, bucketCapacity, bucketPosition, groundDepth, setDrive, canTravel, turn, backUp, trenchStatus, pipeCandidate, connectionCandidate, startPipeWork, digDuration, haulDuration, timingPeriod, createState, start, press, release, cancelCharge, setOperateHeld, pause, buy, step, meter };
+    return { REGIONS, FLEETS, SOILS, CONTRACTS, TERRAIN, PIPE, THROTTLES, engine, setThrottle, crewLevel, crewTag, crewActivity, crewHome, truckPosition, truckPathClear, switchTruckSide, clearCrew, setPlan, planSections, regionById, soil, bucketCapacity, bucketPosition, groundDepth, setDrive, canTravel, turn, backUp, trenchStatus, pipeCandidate, connectionCandidate, startPipeWork, digDuration, haulDuration, timingPeriod, createState, start, press, release, cancelCharge, setOperateHeld, setPrimaryHeld, primaryAction, pause, buy, step, meter };
 });

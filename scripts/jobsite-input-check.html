@@ -29,9 +29,9 @@ const cuts = () => parseInt(el('cut-count').textContent, 10);
 const focused = () => doc().activeElement === el('jobsite-canvas');
 const release = () => key('keyup');
 const idle = () => !['Cycling...', 'Release to dig'].includes(el('action-label').textContent);
-async function fixture(saved = true) {
+async function fixture(saved = true, scenario = '') {
     frame = document.createElement('iframe'); frame.title = 'Game under test';
-    document.querySelector('#game').replaceChildren(frame); frame.src = '/__input-fixture?saved=' + saved;
+    document.querySelector('#game').replaceChildren(frame); frame.src = '/__input-fixture?saved=' + saved + '&scenario=' + scenario;
     await wait(() => el('mobilize')?.textContent === (saved ? 'Return to saved site' : 'Mobilize to site'), 'World selector failed');
     const label = el('region-record').textContent;
     click('mobilize'); await wait(() => !el('start-shift').disabled, 'Scene did not initialize');
@@ -61,7 +61,7 @@ document.querySelector('#run').onclick = async function () {
         el('jobsite-canvas').blur(); assert(doc().activeElement === doc().body, 'Fixture did not reach body focus');
         const before = cuts(); assert(key('keydown'), 'Body-focused Space was ignored'); await delay(1600); release();
         assert(cuts() > before, 'Body-focused hold did not dig'); await delay(3000);
-        el('sound-toggle').focus(); assert(!key('keydown'), 'A Tab-focused button lost its native Space action'); release();
+        el('sound-toggle').focus(); assert(key('keydown'), 'Toolbar-focused Space failed to operate'); release();
         const input = doc().createElement('input'); el('jobsite-app').append(input); input.focus();
         assert(!key('keydown'), 'Space was captured while typing'); release(); input.remove();
         el('jobsite-canvas').focus(); assert(!key('keydown', 'Space', {ctrlKey:true}), 'Control shortcut was captured'); release();
@@ -95,17 +95,37 @@ document.querySelector('#run').onclick = async function () {
     await check('Crew drill restores operating focus when equipment becomes ready', async () => {
         await fixture(); click('start-shift'); el('crew-panel').open = true; click('crew-operation');
         assert(focused(), 'Crew action kept focus on drill button');
-        await wait(() => !el('operate').disabled, 'Crew drill did not finish', 16000);
+        assert(!el('operate').disabled, 'The main action is disabled during a drill');
+        await wait(() => !el('crew-activity').textContent.includes('s left'), 'Crew drill did not finish', 16000);
         const before = cuts(); key('keydown'); await delay(1700); release(); assert(cuts() > before, 'Post-drill hold did not operate');
     });
-    await check('At-grade stopping explains how to continue, then backing up allows another hold', async () => {
-        await fixture(false); click('practice'); key('keydown'); await delay(14000); release();
-        await wait(() => idle() && parseFloat(el('stat-bucket').textContent) === 0, 'Bucket did not empty');
-        assert(el('action-label').textContent === 'At pipe grade', 'Completed bed still asks the player to dig');
-        assert(el('action-help').textContent.includes('back up 2 m'), 'Completed bed lacks next action');
-        const before = cuts(); click('advance-cut'); await delay(1500); key('keydown'); await delay(1700); release();
-        assert(cuts() > before, 'Backing up failed to re-enable held digging');
+    await check('Held Space advances through completed beds; release stops repetition', async () => {
+        await fixture(false); click('practice'); key('keydown'); await delay(22000); release();
+        assert(cuts() >= 6, 'Held Space stalled at the first pipe bed');
+        assert(!el('machine-position').textContent.startsWith('Machine 0.0 m'), 'Machine never advanced');
+        const before = cuts(); await delay(4000); assert(cuts() === before, 'Release kept repeating cuts');
     });
-    log(failures ? failures + ' CHECK(S) FAILED' : 'ALL 6 INPUT CHECKS PASSED'); this.disabled = false;
+    await check('A tap during a cycle queues the next action and stops after it', async () => {
+        await fixture(false); click('practice'); key('keydown'); release();
+        key('keydown'); release(); assert(el('action-help').textContent.includes('queued'), 'Busy tap was ignored');
+        await delay(5000); assert(cuts() === 1 && parseFloat(el('stat-truck').textContent) > 0, 'Queued tap failed to load');
+        assert(parseFloat(el('stat-bucket').textContent) === 0, 'Queued load left its bucket full');
+    });
+    for (const scenario of ['crew', 'truck', 'grade']) await check('Space resumes a saved ' + scenario + ' stop and completes one action', async () => {
+        await fixture(true, scenario); const before = cuts();
+        assert(key('keydown'), 'Space failed on the paused overlay'); release();
+        assert(el('pause-toggle').textContent === 'Pause', 'Space did not resume the shift');
+        assert(!el('operate').disabled, 'Recovery action is disabled');
+        await wait(() => cuts() > before, 'Space did not recover and dig', 20000);
+        await delay(4000); assert(cuts() === before + 1, 'Recovery tap latched into repeated digging');
+    });
+    await check('Space starts a fresh shift and continues after an ended shift', async () => {
+        for (const saved of [false, true]) {
+            await fixture(saved, saved ? 'ended' : ''); const before = cuts();
+            assert(key('keydown'), 'Space was ignored on a shift overlay'); release();
+            await wait(() => cuts() > before, 'Space did not begin the next shift', 10000);
+        }
+    });
+    log(failures ? failures + ' CHECK(S) FAILED' : 'ALL 11 INPUT CHECKS PASSED'); this.disabled = false;
 };
 </script></html>

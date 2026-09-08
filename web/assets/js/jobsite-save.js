@@ -10,7 +10,7 @@
         const cells = [];
         state.terrain.depths.forEach((depth, index) => { if (depth > 0) cells.push(index, depth); });
         const copy = { ...state, region: state.region.id, fleet: state.fleetId, contract: undefined, _savedAt: undefined,
-            terrain: { ...state.terrain, depths: cells }, operateHeld: false, drive: { x: 0, z: 0 }, steer: 0, advance: null,
+            terrain: { ...state.terrain, depths: cells }, operateHeld: false, primaryHeld: false, operationQueued: false, operationWait: 0, recovery: null, drive: { x: 0, z: 0 }, steer: 0, advance: null,
             targetHeading: state.machine.heading, status: state.status === 'playing' ? 'paused' : state.status };
         if (copy.phase === 'charging') { copy.phase = 'idle'; copy.charge = 0; }
         return JSON.stringify({ version: 1, savedAt, state: copy });
@@ -33,7 +33,7 @@
         if (!data.machine || !['x', 'z', 'heading'].every(name => Number.isFinite(data.machine[name]))) throw new Error('Invalid position');
         if (!['ready', 'playing', 'paused', 'won', 'lost'].includes(data.status) || !['idle', 'charging', 'digging', 'swinging', 'dumping', 'returning'].includes(data.phase)) throw new Error('Invalid cycle');
         if (!data.utilities || !Array.isArray(data.utilities.pipes) || !Array.isArray(data.utilities.joints)) throw new Error('Invalid pipe run');
-        const restored = { ...state, ...data, _savedAt: envelope.savedAt, region: state.region, fleet: state.fleet, contract: state.contract, terrain, operateHeld: false, drive: { x: 0, z: 0 }, steer: 0, advance: null, targetHeading: data.machine.heading };
+        const restored = { ...state, ...data, _savedAt: envelope.savedAt, region: state.region, fleet: state.fleet, contract: state.contract, terrain, operateHeld: false, primaryHeld: false, operationQueued: false, operationWait: 0, recovery: null, drive: { x: 0, z: 0 }, steer: 0, advance: null, targetHeading: data.machine.heading };
         if (restored.status === 'playing') restored.status = 'paused';
         if (restored.phase === 'charging') { restored.phase = 'idle'; restored.charge = 0; }
         if (restored.phase === 'digging' && (!restored.cut || !Array.isArray(restored.cut.cells))) throw new Error('Invalid active cut');

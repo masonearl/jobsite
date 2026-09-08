@@ -381,3 +381,112 @@ test('truck side changes clear the far end of an existing quarry trench and can 
  assert.equal(Sim.switchTruckSide(s),true);assert.equal(s.truckRoute[0].z,s.truckPose.z);Sim.step(s,8);
  assert.equal(s.truckRoute.length,0);assert.equal(s.haulBlocked,false);assert.equal(s.safetyStop,false);
 });
+
+function primaryTap(s) { Sim.setPrimaryHeld(s, true); Sim.setPrimaryHeld(s, false); }
+function materialBalance(s) { return s.terrain.dispatched + (s.truckState === 'waiting' ? s.truck : 0) + s.bucket + (s.phase === 'digging' ? s.pendingPayload * s.cut.applied : 0); }
+test('held primary action keeps producing through grade, stockpiles, hauling and work-area boundaries in every region', () => {
+    for (const region of Sim.REGIONS) {
+        const s = Sim.createState(0, true, null, region.id); Sim.setPrimaryHeld(s, true);
+        let previous = 0;
+        for (let minute = 0; minute < 6; minute++) {
+            Sim.step(s, 60);
+            assert.ok(s.digs > previous + 5, region.id + ' stalled: ' + s.message); previous = s.digs;
+            assert.ok(Math.abs(s.terrain.mass - materialBalance(s)) < 1e-5, region.id + ' lost or duplicated soil');
+            assert.ok(Math.abs(s.machine.x) <= 18 && Math.abs(s.machine.z) <= 16);
+        }
+        assert.ok(s.hauled >= 100); assert.ok(s.graded.length > 6);
+        Sim.setPrimaryHeld(s, false); const stopped = s.digs; Sim.step(s, 12);
+        assert.equal(s.digs, stopped, 'Releasing a continuous hold started another cut');
+    }
+});
+test('a tap during a hydraulic cycle queues exactly one following action', () => {
+    const s = playing(0, true); primaryTap(s); assert.equal(s.phase, 'digging');
+    for (let i = 0; i < 10; i++) primaryTap(s);
+    assert.equal(s.operationQueued, true); Sim.step(s, 10);
+    assert.equal(s.digs, 1); assert.equal(s.truck, 1.25); assert.equal(s.bucket, 0);
+    assert.equal(s.operationQueued, false); assert.equal(s.primaryHeld, false);
+    primaryTap(s); Sim.step(s, 2); assert.equal(s.digs, 2);
+});
+test('one primary tap clears a crew stop and completes its queued bite', () => {
+    for (const point of [{ x: 4.5, z: 0 }, { x: 0, z: 0 }, { x: -1, z: -1 }]) {
+        const s = playing(0, true); s.crew[0] = point; s.safetyStop = true;
+        primaryTap(s); assert.equal(s.clearingCrew, true); assert.equal(s.phase, 'idle');
+        Sim.step(s, 15); assert.equal(s.safetyStop, false); assert.equal(s.digs, 1); assert.ok(s.bucket > 0);
+        Sim.step(s, 10); assert.equal(s.digs, 1);
+    }
+});
+test('crew incidents during a held cut recover without requiring a new keydown or losing the active cut', () => {
+    const s = playing(0, true); Sim.setPrimaryHeld(s, true); Sim.step(s, .8);
+    assert.equal(s.phase, 'digging'); s.crew[1] = { x: s.machine.x + 3, z: s.machine.z };
+    Sim.step(s, .05); assert.equal(s.safetyStop, true); assert.equal(s.primaryHeld, true);
+    Sim.step(s, 25); assert.ok(s.digs >= 4); assert.equal(s.safetyStop, false);
+    assert.ok(Math.abs(s.terrain.mass - materialBalance(s)) < 1e-5);
+});
+test('Space recovery unsticks a loaded truck without erasing work or paying it twice', () => {
+    const s = playing(0, true); dig(s); s.utilities.pipes.push({ x: 8, z: -6, y: -.7, heading: 0, length: 2 });
+    s.truck = 19; s.terrain.mass += 19; s.machine.x = -5.4; s.truckPose = Sim.truckPosition(s);
+    s.crew = s.crew.map((_, i) => Sim.crewHome(s, i)); Sim.step(s, .1);
+    const terrain = Array.from(s.terrain.depths), pipes = JSON.stringify(s.utilities.pipes), cash = s.credits;
+    primaryTap(s); assert.ok(s.recovery); Sim.step(s, 6);
+    assert.equal(s.haulBlocked, false); assert.equal(s.haulSide, 1);
+    assert.deepEqual(Array.from(s.terrain.depths), terrain); assert.equal(JSON.stringify(s.utilities.pipes), pipes);
+    assert.equal(s.hauled, 20); assert.equal(s.credits, cash + s.region.payout); assert.equal(s.bucket, 1.5);
+    Sim.step(s, 15); assert.equal(s.hauled, 20); assert.equal(s.truckState, 'waiting');
+    primaryTap(s); Sim.step(s, 3); assert.equal(s.truck, 1.5); assert.equal(s.bucket, 0);
+    assert.ok(Math.abs(s.terrain.mass - materialBalance(s)) < 1e-5);
+});
+test('a truck blocked after dispatch recovers and returns without a second payout', () => {
+    const s = playing(0, true); s.truck = 19; s.bucket = 2; s.terrain.mass = 21;
+    s.utilities.pipes.push({ x: 8, z: -6, y: -.7, heading: 0, length: 2 });
+    dump(s); Sim.step(s, 1); assert.equal(s.haulBlocked, true); assert.equal(s.hauled, 20);
+    primaryTap(s); Sim.step(s, 15);
+    assert.equal(s.hauled, 20); assert.equal(s.credits, 100); assert.equal(s.bucket, 0); assert.equal(s.truck, 1);
+    assert.equal(s.terrain.mass, materialBalance(s));
+});
+test('completed beds and installed pipe accept a tap to move and dig fresh material', () => {
+    for (const installed of [false, true]) {
+        const s = playing(0, true); Sim.setOperateHeld(s, true); Sim.step(s, 20); Sim.setOperateHeld(s, false);
+        if (installed) { Sim.startPipeWork(s, 'install'); Sim.step(s, 15); }
+        const old = s.digs, pipes = JSON.stringify(s.utilities.pipes);
+        primaryTap(s); Sim.step(s, 15);
+        assert.equal(s.digs, old + 1); assert.equal(s.machine.x, -2); assert.equal(JSON.stringify(s.utilities.pipes), pipes);
+        assert.ok(Math.abs(s.terrain.mass - materialBalance(s)) < 1e-5);
+    }
+});
+test('exhausted free cuts and pipe stock at the bucket relocate without deleting terrain', () => {
+    for (const stock of [false, true]) {
+        const s = playing(0, true); s.alignment = false;
+        if (stock) s.stockpiles.push({ ...Sim.bucketPosition(s), heading: 0, length: 4.5, radius: .42 });
+        else { Sim.setOperateHeld(s, true); Sim.step(s, 120); Sim.setOperateHeld(s, false); }
+        const mass = s.terrain.mass, digs = s.digs;
+        primaryTap(s); Sim.step(s, 15);
+        assert.equal(s.digs, digs + 1); assert.ok(s.terrain.mass > mass);
+        assert.ok(Math.abs(s.terrain.mass - materialBalance(s)) < 1e-5);
+    }
+});
+test('queued actions wait for pipe work, drills and lunch; pause cancels them', () => {
+    for (const activity of ['operation', 'lunch', 'pipe']) {
+        const s = playing(0, true);
+        if (activity === 'pipe') { Sim.setOperateHeld(s, true); Sim.step(s, 20); Sim.setOperateHeld(s, false); Sim.startPipeWork(s, 'install'); }
+        else Sim.crewActivity(s, activity);
+        const before = s.digs; primaryTap(s); Sim.step(s, .5); assert.equal(s.digs, before);
+        Sim.step(s, 25); assert.equal(s.digs, before + 1);
+        primaryTap(s); Sim.pause(s); assert.equal(s.operationQueued, false); assert.equal(s.primaryHeld, false);
+        const stopped = s.digs; Sim.pause(s); Sim.step(s, 10); assert.equal(s.digs, stopped);
+    }
+});
+test('parked trucks, canceled routes, turning and a saved paused shift accept the next primary action', () => {
+    const s = playing(0, true); Sim.switchTruckSide(s); Sim.step(s, .2); Sim.switchTruckSide(s);
+    primaryTap(s); Sim.step(s, 15); assert.equal(s.digs, 1); assert.equal(s.truckParked, false);
+    primaryTap(s); Sim.step(s, 4); Sim.turn(s, 1); primaryTap(s); Sim.step(s, 15); assert.equal(s.digs, 2);
+    Sim.pause(s); primaryTap(s); assert.equal(s.status, 'playing'); Sim.step(s, 10); assert.equal(s.bucket, 0);
+});
+
+test('repeated truck/crew overlap cannot soft-lock a partially excavated cut', () => {
+    const s = playing(0, true); Sim.setPrimaryHeld(s, true); Sim.step(s, .8);
+    assert.equal(s.phase, 'digging'); const removed = s.terrain.mass;
+    s.truckPose = Sim.crewHome(s, 0); s.truckParked = true;
+    Sim.step(s, 25);
+    assert.equal(s.safetyStop, false); assert.equal(s.truckParked, false); assert.ok(s.digs > 2);
+    assert.ok(s.terrain.mass >= removed); assert.ok(Math.abs(s.terrain.mass - materialBalance(s)) < 1e-5);
+});

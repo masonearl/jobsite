@@ -85,3 +85,13 @@ test('truck loading side and an unfinished relocation remain at the saved positi
  assert.equal(restored.haulSide,1);assert.deepEqual(restored.truckRoute,s.truckRoute);assert.deepEqual(restored.truckPose,s.truckPose);
  Sim.pause(restored);Sim.step(restored,5);assert.equal(restored.truckRoute.length,0);assert.equal(restored.truckPose.z,6);
 });
+
+test('reloading a queued recovery preserves the site and requires fresh operating input', () => {
+    const s = job(); s.truckParked = true; Sim.setPrimaryHeld(s, true); assert.ok(s.recovery);
+    const restored = Save.decode(Save.encode(s), 'utah', 'utility');
+    assert.equal(restored.primaryHeld, false); assert.equal(restored.operationQueued, false); assert.equal(restored.recovery, null);
+    assert.deepEqual(restored.terrain.depths, s.terrain.depths); assert.equal(restored.bucket, s.bucket);
+    Sim.pause(restored); Sim.step(restored, 10); assert.equal(restored.digs, s.digs);
+    Sim.setPrimaryHeld(restored, true); Sim.setPrimaryHeld(restored, false); Sim.step(restored, 15);
+    assert.equal(restored.truckParked, false); assert.equal(restored.digs, s.digs + 1);
+});
