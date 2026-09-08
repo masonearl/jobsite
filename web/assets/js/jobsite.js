@@ -184,7 +184,7 @@
         onMap = false; $('equipment-toggle').hidden = false; $('world-screen').hidden = true; $('play-screen').hidden = false; $('world-toggle').hidden = false; scrollTop();
         const resume = state && state.region.id === selected.id && state.fleetId === fleetId && state.status === 'paused' && sceneReady;
         if (resume) { lastStatus = ''; hud(); scene.resize(); return; }
-        state = saved.state || Sim.createState(0, false, null, selected.id, fleetId); lastStatus = ''; lastSoundEvent = 0;
+        state = saved.state || Sim.createState(0, false, null, selected.id, fleetId); if (state.project) Sim.enableAutonomy(state); lastStatus = ''; lastSoundEvent = 0;
         text('save-status', saved.recovered ? 'Recovered previous device save' : saved.state ? 'Saved site restored' : 'Saves on this device');
         loading = true; sceneReady = false; $('mobilize').disabled = true; $('renderer-error').hidden = true;
         $('start-shift').disabled = $('practice').disabled = true;
@@ -201,8 +201,10 @@
         clearOperate(); stopTravel();
         if (!state.project && state.phase !== 'idle') state = Sim.createState(state.level, true, state);
         if (!Sim.startProject(state)) { text('jobsite-hint', state.message || 'Finish the current crew task before starting the utility line.'); return; }
-        lastStatus = ''; scene.dirty = true; scene.setCamera('machine'); document.querySelectorAll('[data-camera]').forEach(button => button.classList.toggle('selected', button.dataset.camera === 'machine')); hud(); saveJob(); focusGame();
+        Sim.enableAutonomy(state);
+        lastStatus = ''; scene.dirty = true; scene.setCamera('site'); document.querySelectorAll('[data-camera]').forEach(button => button.classList.toggle('selected', button.dataset.camera === 'site')); hud(); saveJob(); focusGame();
     });
+    for (const role of ['dig', 'pipe', 'backfill']) $('gang-' + role).addEventListener('click', () => { Sim.setGang(state, role, !state.project.flow.running[role]); hud(); saveJob(); });
     $('order-materials').addEventListener('click', () => { Sim.orderMaterials(state); hud(); saveJob(); focusGame(); });
     $('project-method').addEventListener('change', e => { Sim.setProjectMethod(state, e.target.value); hud(); saveJob(); focusGame(); });
     Sim.PROJECT_STAGES.forEach(label => { const item = document.createElement('li'); item.textContent = label; $('project-steps').append(item); });
@@ -230,7 +232,7 @@
             text('overlay-copy', 'Dispatch ' + target + ' tonnes in ' + clock(state.contract.seconds) + '. Press Space to start. Hold to dig, load, and advance to fresh material. Release in the timing zone for a clean single bite.');
             text('start-shift', 'Start shift');
         } else if (state.status === 'paused') {
-            text('overlay-kicker', 'Engine idle'); text('overlay-title', 'Shift paused.'); text('overlay-copy', 'Your clock is stopped. Press Space or Resume shift to continue.'); text('start-shift', 'Resume shift');
+            text('overlay-kicker', 'Engine idle'); text('overlay-title', 'Shift paused.'); text('overlay-copy', state.project?.flow ? 'All crews and deliveries are paused. Resume shift to continue their saved assignments.' : 'Your clock is stopped. Press Space or Resume shift to continue.'); text('start-shift', 'Resume shift');
         } else if (state.project?.complete) {
             text('overlay-kicker', 'Utility project / accepted'); text('overlay-title', 'Line handed over.');
             text('overlay-copy', '12 m installed and accepted. Six pre-cover inspections. 24 compacted lifts. ' + clock(state.project.elapsed) + ' elapsed / $' + Math.round(Sim.projectCost(state)) + ' scenario cost. Your field log and completed work are saved.');
@@ -246,7 +248,7 @@
     function hud() {
         if (!state || onMap || onGuide) return;
         const soil = Sim.soil(state), project = state.project, section = Sim.projectSection(state);
-        $('project-strip').hidden = $('project-desk').hidden = !project; app.classList.toggle('has-project', !!project);
+        $('project-strip').hidden = $('project-desk').hidden = !project; app.classList.toggle('has-project', !!project); app.classList.toggle('has-flow', !!project?.flow); $('flow-board').hidden = !project?.flow; $('flow-summary').hidden = !project?.flow; $('spoil-record').hidden = !project?.flow;
         text('camera-hint', project ? 'Space: next operation / P: pause / guided set-out line' : 'Up: forward / Down: reverse / Left-right: turn / Space: work / recover');
         if (project) projectHud(project, section);
         text('contract-label', project ? state.region.name + ' / utility project' : state.practice ? state.region.name + ' / free dig' : state.region.name + ' / contract ' + (state.level + 1));
@@ -271,7 +273,7 @@
         text('foreman-status', project ? Sim.projectAction(state).replace(/\.+$/, '') + '. Follow the project sequence above.' : bed.message);
         text('safety-status', state.recovery ? 'Recovery in progress / site work preserved' : state.safetyStop ? state.clearingCrew ? 'Crew clearing / equipment stopped' : 'Crew in equipment zone / Space clears and continues' : state.haulBlocked ? 'Haul path blocked / Space recovers the truck' : 'Keep crew clear of the swing and haul zones');
         $('safety-status').classList.toggle('is-warning', state.safetyStop || state.haulBlocked);
-        $('clear-crew').disabled = state.status !== 'playing' || !!state.utilities.work || !!project?.work || state.clearingCrew;
+        $('clear-crew').disabled = !!project?.flow || state.status !== 'playing' || !!state.utilities.work || !!project?.work || state.clearingCrew;
         text('switch-truck', state.truckRoute.length ? 'Cancel truck move' : 'Switch truck side');
         $('switch-truck').disabled = state.truckRoute.length ? state.status !== 'playing' : !Sim.canTravel(state) || state.truckState !== 'waiting';
         text('density-note', soil.density.toFixed(2) + ' t/m3 bank density preset');
@@ -282,7 +284,7 @@
         text('crew-roster', ['foreman', 'operator', 'laborer', 'joiner'].map(role => role[0].toUpperCase() + role.slice(1) + ' / level ' + Sim.crewLevel(state, role) + ' / ' + state.skills[role] + ' XP').join(' | '));
         text('crew-energy', Math.round(state.energy) + '% energy / spotting level ' + Sim.crewLevel(state, 'spotting') + (state.energy < 20 ? ' / Lunch restores work speed' : ''));
         text('crew-activity', state.crewActivity ? state.crewActivity.type + ' / ' + Math.ceil(state.crewActivity.duration - state.crewActivity.elapsed) + ' s left' : 'Training and lunch park the equipment. Progress saves with this site.');
-        for (const type of ['spotting', 'operation', 'lunch']) $('crew-' + type).disabled = state.status !== 'playing' || state.phase !== 'idle' || !!state.utilities.work || !!project?.work || !!state.crewActivity;
+        for (const type of ['spotting', 'operation', 'lunch']) $('crew-' + type).disabled = state.status !== 'playing' || state.phase !== 'idle' || !!project?.flow || !!state.utilities.work || !!project?.work || !!state.crewActivity;
         if (scene) text('render-stats', 'Graphics: Three.js / 30 fps cap / ' + scene.renderMs.toFixed(1) + ' ms average CPU submission / ' + scene.renderer.info.render.calls + ' draw calls. GPU time and device memory are not measured.');
         document.querySelectorAll('[data-drive]').forEach(button => { button.disabled = !!project || !Sim.canTravel(state); });
         text('quantity-label', project ? 'Accepted line' : 'Dispatched');
@@ -313,6 +315,7 @@
             const label = state.upgrades[key] ? 'Installed' : key === 'bucket' ? '$200 / 60% larger bites' : '$150 / shorter waits';
             if (button.querySelector('small').textContent !== label) button.querySelector('small').textContent = label;
         });
+        if (project?.flow) flowHud(project);
         if (lastStatus !== state.status) { lastStatus = state.status; overlay(); }
     }
     function projectHud(project, section) {
@@ -337,6 +340,31 @@
         }
         const logKey = project.log.map(e => e.time).join(',');
         if ($('project-log').dataset.key !== logKey) { $('project-log').dataset.key = logKey; $('project-log').replaceChildren(); project.log.slice(0, 8).forEach(e => { const item = document.createElement('li'); item.textContent = clock(e.time) + ' / ' + e.message; $('project-log').append(item); }); }
+    }
+    function flowHud(project) {
+        const f = project.flow, progress = Sim.flowProgress(state);
+        text('project-phase', project.complete ? 'All assignments complete' : 'Run the spread');
+        text('project-station', (progress.excavated - progress.backfilled) * 2 + ' m open / 10 m limit');
+        text('flow-summary', progress.excavated * 2 + ' m excavated / ' + progress.piped * 2 + ' m pipe checked / ' + progress.backfilled * 2 + ' m backfilled');
+        for (const role of ['dig', 'pipe', 'backfill']) {
+            const count = progress[role === 'dig' ? 'excavated' : role === 'pipe' ? 'piped' : 'backfilled'];
+            text('gang-' + role + '-status', f.messages[role] || (role === 'dig' ? 'Ready on the side of the trench' : role === 'pipe' ? 'Follows behind excavation' : 'Follows inspected pipe / starts after 6 m dug'));
+            text('gang-' + role + '-quantity', count * 2 + ' / 12 m');
+            $('gang-' + role + '-bar').style.width = count / 6 * 100 + '%';
+            const button = $('gang-' + role); button.disabled = state.status !== 'playing' || project.complete || count === 6;
+            text('gang-' + role, count === 6 ? 'Complete' : f.running[role] ? 'Stop ' + (role === 'dig' ? 'excavation' : role === 'pipe' ? 'pipe crew' : 'backfill') : 'Start ' + (role === 'dig' ? 'excavation' : role === 'pipe' ? 'pipe crew' : 'backfill'));
+            button.setAttribute('aria-pressed', String(f.running[role]));
+        }
+        text('stat-truck', state.truckState === 'waiting' ? state.truck.toFixed(1) + ' / ' + state.fleet.capacity + ' t' : state.truckState === 'hauling' ? state.truck.toFixed(1) + ' t hauling' : 'Truck inbound');
+        text('project-spoil', f.spoilVolume.toFixed(1) + ' m3 retained / ' + f.reusedVolume.toFixed(1) + ' m3 reused');
+        text('project-output', state.hauled.toFixed(1) + ' t hauled / ' + project.materialPlaced.toFixed(1) + ' m3 imported / ' + f.reusedVolume.toFixed(1) + ' m3 reused');
+        canvas.setAttribute('aria-label', '3D utility project. Dispatch excavation, pipe and backfill using their Start buttons. Space starts or stops the spread. P pauses. Drag to orbit and scroll to zoom.');
+        text('foreman-status', 'Dispatch each crew once. They wait for clear work fronts; Stop finishes the current operation.');
+        text('camera-hint', 'Click Start on each assignment / Space: start or stop spread / P: pause');
+        text('action-help', 'Click once to run or stop all crews / no holding needed');
+        const next = project.sections.find(section => !section.accepted);
+        text('project-lift', next ? 'Backfill front ' + project.sections.indexOf(next) * 2 + '-' + (project.sections.indexOf(next) * 2 + 2) + ' m / lift ' + Math.min(4, next.lift + 1) + ' of 4' : 'All lifts accepted');
+        $('project-method').disabled = !!f.pipeWork || !!f.backfillWork || project.complete;
     }
     function startShift() {
         if (!sceneReady) return;
@@ -380,7 +408,9 @@
     });
     function beginPrimary(source) {
         stopTravel();
+        const resumingAssignments = state.status === 'paused' && state.project?.flow && Object.values(state.project.flow.running).some(Boolean);
         if (state.status !== 'playing') startShift();
+        if (resumingAssignments) { hud(); return; }
         if (onMap || state.status !== 'playing') return;
         focusGame(); inputSource = source; Sim.setPrimaryHeld(state, true); hud();
     }

@@ -36,6 +36,7 @@ class Handler(SimpleHTTPRequestHandler):
                 'crew': 's.crew[0]={x:s.machine.x,z:s.machine.z};s.safetyStop=true;',
                 'truck': 's.machine.x=-5.4;s.truckPose=JobsiteSim.truckPosition(s);s.truckParked=true;s.haulBlocked=true;s.crew=s.crew.map((_,i)=>JobsiteSim.crewHome(s,i));',
                 'overlap': 's.truckPose=JobsiteSim.crewHome(s,0);s.truckParked=true;',
+                'flow-fill': "JobsiteSim.startProject(s);JobsiteSim.enableAutonomy(s);JobsiteSim.setSpreadRunning(s,true);for(let i=0;i<10000;i++){JobsiteSim.step(s,.1);if(s.project.flow.backfillWork?.type==='fill'&&s.project.flow.backfillWork.applied>.2)break;}",
                 'project-fill': "JobsiteSim.startProject(s);JobsiteSim.setPrimaryHeld(s,true);for(let i=0;i<10000;i++){JobsiteSim.step(s,.1);if(s.project.work?.type==='fill'&&s.project.work.applied>.2)break;}JobsiteSim.setPrimaryHeld(s,false,true);",
                 'grade': 's.machine.x=0;JobsiteSim.setOperateHeld(s,true);JobsiteSim.step(s,20);JobsiteSim.setOperateHeld(s,false);',
                 'ended': "s.status='lost';",

@@ -46,9 +46,12 @@ export class JobsiteScene {
         this.dirty = true;
     }
     setCamera(name) {
+        this.cameraMode = name;
         const positions = { site: [11, 5.5, 11], machine: [8, 3.9, 9], overhead: [6, 22, 8] };
         this.camera.position.set(...(positions[name] || positions.site));
-        const position = this.state?.machine || { x: 0, z: 0 };
+        const flow = this.state?.project?.flow, sections = this.state?.project?.sections;
+        const position = flow && name !== 'machine' ? { x: (sections[0].x + sections[5].x) / 2, z: sections[0].z + 2 } : this.state?.machine || { x: 0, z: 0 };
+        if (flow && name === 'site') this.camera.position.set(11, 10, -15);
         this.camera.position.add(v(position.x, 0, position.z));
         this.controls.target.set(position.x + 1.5, 1.3, position.z - 1.5);
         this.cameraAnchor = v(position.x, 0, position.z);
@@ -402,33 +405,74 @@ export class JobsiteScene {
         this.box([.02, .5, 1.4], [3.26, 1.7, 0], this.glass || steel, this.supplyTruck);
         for (const x of [-1.5, -.7, 2.5]) for (const z of [-.85, .85]) { const wheel = this.cylinder(.42, .42, .28, [x, .43, z], this.rubber, this.supplyTruck); wheel.rotation.x = Math.PI / 2; }
         for (let i = 0; i < 3; i++) this.box([1.5, .5, .45], [-.8, 1.2, (i - 1) * .5], gravel, this.supplyTruck);
+        this.spoilBanks = Array.from({ length: 6 }, () => this.mesh(new THREE.ConeGeometry(1, 1, 12), this.dirtMaterial, [0, 0, 0]));
+        this.backhoe = new THREE.Group(); this.root.add(this.backhoe);
+        this.box([3.2, .4, 1.45], [0, .82, 0], yellow, this.backhoe, true);
+        this.box([1.1, .7, 1.2], [.95, 1.3, 0], yellow, this.backhoe, true);
+        this.box([1.25, 1.25, 1.2], [-.35, 1.65, 0], this.glass || steel, this.backhoe);
+        this.box([1.45, .12, 1.4], [-.35, 2.32, 0], yellow, this.backhoe);
+        for (const x of [-.95, 1.05]) for (const z of [-.83, .83]) {
+            const radius = x < 0 ? .66 : .46;
+            const tire = this.cylinder(radius, radius, .38, [x, radius, z], this.rubber, this.backhoe); tire.rotation.x = Math.PI / 2;
+            const hub = this.cylinder(radius * .48, radius * .48, .39, [x, radius, z], yellow, this.backhoe); hub.rotation.x = Math.PI / 2;
+        }
+        this.loaderArms = [];
+        for (const side of [-1, 1]) this.loaderArms.push(this.rod(v(.1, 1.3, side * .55), v(2.4, .55, side * .55), .1, yellow, this.backhoe));
+        this.loaderBucket = new THREE.Group(); this.backhoe.add(this.loaderBucket);
+        this.box([.85, .1, 1.8], [0, 0, 0], steel, this.loaderBucket);
+        this.box([.12, .6, 1.8], [-.4, .25, 0], yellow, this.loaderBucket);
+        for (const side of [-1, 1]) this.box([.85, .48, .09], [0, .22, side * .87], yellow, this.loaderBucket);
+        this.rod(v(-1.25, 1, 0), v(-1.9, 2.2, 0), .14, yellow, this.backhoe);
+        this.rod(v(-1.9, 2.2, 0), v(-2.1, .75, 0), .1, yellow, this.backhoe);
+        this.box([.45, .4, .55], [-2, .65, 0], steel, this.backhoe);
+        const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.label('BACKFILL', 256), depthTest: true }));
+        tag.position.set(-.35, 2.8, 0); tag.scale.set(2, .45, 1); this.backhoe.add(tag);
+        this.backfillWorker = new THREE.Group(); this.root.add(this.backfillWorker);
+        this.box([.45, .65, .3], [0, 1.05, 0], this.material('#e19d3d'), this.backfillWorker);
+        for (const side of [-1, 1]) this.box([.15, .65, .17], [side * .13, .4, 0], steel, this.backfillWorker);
+        this.cylinder(.16, .16, .28, [0, 1.5, 0], this.material('#bd936d'), this.backfillWorker);
+        this.cylinder(.22, .23, .1, [0, 1.7, 0], yellow, this.backfillWorker);
+
     }
     updateProjectScene(s) {
-        const project = s.project, section = Sim.projectSection(s), work = project?.work;
+        const project = s.project, flow = project?.flow, work = flow ? flow.backfillWork : project?.work, section = flow && work ? project.sections[work.index] : Sim.projectSection(s);
         this.projectMarks.visible = this.aggregate.visible = !!project;
         this.compactor.visible = work?.type === 'compact' && section.lift >= 2;
         this.tamper.visible = work?.type === 'compact' && section.lift < 2;
-        this.water.visible = !!section && section.water > .03 && Sim.groundDepth(s, section.x, section.z) > .2;
+        const waterSection = flow ? project.sections.find(p => p.excavated && p.water > .03) : section;
+        this.water.visible = !!waterSection && waterSection.water > .03 && Sim.groundDepth(s, waterSection.x, waterSection.z) > .2;
         this.supplyTruck.visible = !!project?.delivery;
+        this.backhoe.visible = !!flow?.mobilized; this.backfillWorker.visible = !!flow?.backfillWork;
+        this.spoilBanks.forEach((pile, i) => {
+            const bank = flow?.bank[i]; pile.visible = !!bank && bank.volume > .01;
+            if (pile.visible) { const size = Math.cbrt(bank.volume * 3 / Math.PI); pile.scale.set(size, size, size); pile.position.set(bank.x, size / 2, bank.z); }
+        });
+        if (flow) {
+            const back = flow.backhoe, push = work?.type === 'fill' ? Math.sin(work.elapsed / work.duration * Math.PI * 2) : 0;
+            this.backhoe.position.set(back.x, 0, back.z - push * .18); this.backhoe.rotation.y = back.heading;
+            this.loaderBucket.position.set(2.35 + push * .12, .36 + Math.max(0, -push) * .45, 0); this.loaderBucket.rotation.z = -.1 - push * .12;
+            this.loaderArms.forEach((arm, i) => this.placeRod(arm, v(.1, 1.3, (i ? 1 : -1) * .55), v(this.loaderBucket.position.x, this.loaderBucket.position.y + .22, (i ? 1 : -1) * .55)));
+            if (work) this.backfillWorker.position.set(section.x + .65, -Sim.groundDepth(s, section.x + .65, section.z - .45), section.z - .45);
+        }
         if (!project) return;
         if (this.projectRef !== project) {
             this.projectMarks.traverse(object => { object.geometry?.dispose(); if (object.isSprite) { object.material.map?.dispose(); object.material.dispose(); } }); this.projectMarks.clear(); this.projectRef = project;
             const stake = this.material('#e4c68b', .05, .9);
             project.sections.forEach((p, i) => {
-                this.box([.05, .8, .05], [p.x, .4, p.z + 1.1], stake, this.projectMarks);
+                this.box([.05, .8, .05], [p.x, .4, p.z - 1.1], stake, this.projectMarks);
                 const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.label(i * 2 + '-' + (i * 2 + 2) + ' m', 128), depthTest: true }));
-                sprite.position.set(p.x, 1.1, p.z + 1.1); sprite.scale.set(1.5, .4, 1); this.projectMarks.add(sprite);
+                sprite.position.set(p.x, 1.1, p.z - 1.1); sprite.scale.set(1.5, .4, 1); this.projectMarks.add(sprite);
             });
         }
-        this.aggregate.position.set(project.sections[0].x + 3, 0, project.sections[0].z + 4);
+        this.aggregate.position.set(project.sections[0].x + 4, 0, project.sections[0].z - 4);
         this.aggregate.scale.setScalar(Math.max(.25, Math.min(1.6, Math.cbrt((project.inventory.fill + project.inventory.bedding) / 4))));
-        if (this.water.visible) this.water.position.set(section.x, -Sim.groundDepth(s, section.x, section.z) + section.water, section.z);
+        if (this.water.visible) this.water.position.set(waterSection.x, -Sim.groundDepth(s, waterSection.x, waterSection.z) + waterSection.water, waterSection.z);
         if (work?.type === 'compact') {
             const progress = work.elapsed / work.duration, x = section.x + Math.sin(progress * Math.PI * 2) * .7;
             const tool = section.lift < 2 ? this.tamper : this.compactor, z = section.z + (section.lift < 2 ? .35 : 0);
             tool.position.set(x, -Sim.groundDepth(s, x, z) + Math.sin(this.frame * 60) * .015, z); tool.rotation.y = Math.PI / 2;
         }
-        if (project.delivery) this.supplyTruck.position.set(project.sections[0].x + 5 + 25 * (1 - Math.min(1, project.delivery.elapsed / project.delivery.duration * 1.5)), 0, project.sections[0].z + 7);
+        if (project.delivery) this.supplyTruck.position.set(project.sections[0].x + 5 + 25 * (1 - Math.min(1, project.delivery.elapsed / project.delivery.duration * 1.5)), 0, project.sections[0].z - 7);
     }
     makePipe(target, parent = this.utilitiesGroup) {
         const group = new THREE.Group(); parent.add(group);
@@ -458,7 +502,7 @@ export class JobsiteScene {
                 collar.quaternion.setFromUnitVectors(v(0, 1, 0), v(Math.cos(joint.heading), 0, -Math.sin(joint.heading)));
             }
         }
-        const work = s.utilities.work || s.project?.work;
+        const work = s.utilities.work || s.project?.flow?.pipeWork || s.project?.work;
         if (work?.type === 'install' || work?.type === 'pipe') {
             if (!this.pendingPipe) this.pendingPipe = this.makePipe(work.target, this.root);
             this.pendingPipe.position.y = .85 + (work.target.y - .85) * ease(work.elapsed / (work.duration || 3));
@@ -477,7 +521,7 @@ export class JobsiteScene {
     }
     updateGround(s) {
         if (this.terrainRef === s.terrain && this.lastTerrainRevision === s.terrain.revision) return;
-        const dirtyCells = s.project?.work?.cells.length ? s.project.work.cells : s.cut?.cells;
+        const dirtyCells = s.project?.flow ? Object.keys(s.terrain.dirty || {}).map(index => ({ index: Number(index) })) : s.project?.work?.cells.length ? s.project.work.cells : s.cut?.cells;
         const full = this.terrainRef !== s.terrain || !dirtyCells;
         this.terrainRef = s.terrain; this.lastTerrainRevision = s.terrain.revision;
         const { position: pos, color: colors, normal } = this.ground.geometry.attributes;
@@ -506,6 +550,7 @@ export class JobsiteScene {
             const start = Math.max(0, first - row), stop = Math.min(pos.count - 1, end + row);
             normal.addUpdateRange(start * 3, (stop - start + 1) * 3); normal.needsUpdate = true;
         }
+        if (s.project?.flow) s.terrain.dirty = {};
         this.dirtMaterial.color.set(Sim.soil(s).color);
         this.dirty = true;
     }
@@ -553,10 +598,17 @@ export class JobsiteScene {
         else if (s.phase === 'returning') swing = 1 - ease(s.phaseTime / .65);
         this.state = s;
         this.machine.position.set(s.machine.x, 0, s.machine.z); this.machine.rotation.y = s.machine.heading;
-        const anchor = v(s.machine.x, 0, s.machine.z), travel = anchor.clone().sub(this.cameraAnchor);
+        const flow = s.project?.flow, sections = s.project?.sections;
+        const anchor = flow && this.cameraMode !== 'machine' ? v((sections[0].x + sections[5].x) / 2, 0, sections[0].z + 2) : v(s.machine.x, 0, s.machine.z), travel = anchor.clone().sub(this.cameraAnchor);
         this.camera.position.add(travel); this.controls.target.add(travel); this.cameraAnchor.copy(anchor);
-        this.upper.rotation.y = swing * 1.7 * -s.haulSide;
-        const t = s.phase === 'digging' ? Math.min(1, s.phaseTime / Sim.digDuration(s)) : 0;
+        let dumpReach = 5.75;
+        if (flow) {
+            const section = sections[Math.min(5, flow.digIndex)], target = flow.dump === 'spoil' ? flow.bank[Math.min(5, flow.digIndex)] : s.truckPose;
+            const digAngle = Math.atan2(s.machine.z - section.z, section.x - s.machine.x), dumpAngle = Math.atan2(s.machine.z - target.z, target.x - s.machine.x);
+            this.upper.rotation.y = digAngle + (dumpAngle - digAngle) * swing;
+            dumpReach = Math.hypot(target.x - s.machine.x, target.z - s.machine.z) / s.fleet.scale;
+        } else this.upper.rotation.y = swing * 1.7 * -s.haulSide;
+        const t = s.phase === 'digging' ? Math.min(1, s.phaseTime / (Sim.digDuration(s) * (flow ? 4 : 1))) : 0;
         let toolX = s.bucket > 0 ? 4.6 : 6, toolY = s.bucket > 0 ? 1.2 : .3, curl = s.bucket > 0 ? -.95 : .05;
         if (s.phase === 'digging') {
             const entry = ease(t / .25), pull = ease((t - .25) / .45), lift = ease((t - .65) / .35);
@@ -564,7 +616,7 @@ export class JobsiteScene {
             toolY = .3 - entry * (.6 + (s.cut?.depth || 0) / s.fleet.scale) + lift * (1.5 + (s.cut?.depth || 0) / s.fleet.scale);
             curl = .05 - pull;
         }
-        toolX += (5.75 - toolX) * swing; toolY += (3.55 / s.fleet.scale - toolY) * swing;
+        toolX += (dumpReach - toolX) * swing; toolY += ((flow?.dump === 'spoil' ? 1.5 : 3.55) / s.fleet.scale - toolY) * swing;
         if (s.phase === 'dumping') curl += ease(s.phaseTime / .45) * 1.8;
         if (s.phase === 'returning') curl = .85 - ease(s.phaseTime / .65) * 1.8;
         const bucketScale = s.upgrades.bucket ? 1.16 : 1;

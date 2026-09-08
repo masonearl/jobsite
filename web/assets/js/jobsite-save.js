@@ -10,14 +10,14 @@
         const cells = [];
         state.terrain.depths.forEach((depth, index) => { if (depth > 0) cells.push(index, depth); });
         const copy = { ...state, region: state.region.id, fleet: state.fleetId, contract: undefined, _savedAt: undefined,
-            terrain: { ...state.terrain, depths: cells }, operateHeld: false, primaryHeld: false, operationQueued: false, operationWait: 0, recovery: null, drive: { x: 0, z: 0 }, steer: 0, advance: null,
+            terrain: { ...state.terrain, depths: cells, dirty: undefined }, operateHeld: false, primaryHeld: false, operationQueued: false, operationWait: 0, recovery: null, drive: { x: 0, z: 0 }, steer: 0, advance: null,
             targetHeading: state.machine.heading, status: state.status === 'playing' ? 'paused' : state.status };
         if (copy.phase === 'charging') { copy.phase = 'idle'; copy.charge = 0; }
-        return JSON.stringify({ version: state.project ? 2 : 1, savedAt, state: copy });
+        return JSON.stringify({ version: state.project?.flow ? 3 : state.project ? 2 : 1, savedAt, state: copy });
     }
     function decode(raw, region, fleet) {
         const envelope = JSON.parse(raw);
-        if (![1, 2].includes(envelope.version)) throw new Error('Unsupported save version');
+        if (![1, 2, 3].includes(envelope.version)) throw new Error('Unsupported save version');
         const data = envelope.state;
         if (!data || data.region !== region || data.fleet !== fleet || !Sim.FLEETS[fleet] || !Sim.REGIONS.some(r => r.id === region)) throw new Error('Different job');
         const state = Sim.createState(data.level, data.practice, null, region, fleet);
@@ -45,6 +45,17 @@
             }
             for (const value of [...Object.values(p.inventory || {}), ...Object.values(p.costs || {})]) if (!Number.isFinite(value) || value < -1e-5) throw new Error('Invalid project quantities');
             if (!p.inventory || !['pipe', 'bedding', 'fill'].every(key => Number.isFinite(p.inventory[key])) || !p.costs || !['materials', 'plant', 'haul'].every(key => Number.isFinite(p.costs[key])) || !Array.isArray(p.log)) throw new Error('Invalid project records');
+            if (p.flow) {
+                const f = p.flow;
+                const finite = values => values.every(value => Number.isFinite(value) && value >= -1e-5);
+                if (!f.running || !['dig', 'pipe', 'backfill'].every(role => typeof f.running[role] === 'boolean') || !Number.isInteger(f.digIndex) || f.digIndex < 0 || f.digIndex > 6 || f.openLimit !== 5) throw new Error('Invalid crew assignments');
+                if (!finite([f.spoilVolume, f.spoilMass, f.reusedVolume, f.reusedMass, f.retainedVolume, f.bucketVolume, f.briefing]) || !Array.isArray(f.bank) || f.bank.length !== 6 || !f.bank.every(pile => finite([pile.volume, pile.mass]) && Number.isFinite(pile.x) && Number.isFinite(pile.z))) throw new Error('Invalid spoil bank');
+                if (!f.backhoe || ![f.backhoe.x, f.backhoe.z, f.backhoe.heading].every(Number.isFinite) || !['spoil', 'truck'].includes(f.dump)) throw new Error('Invalid backfill equipment');
+                for (const role of ['pipe', 'backfill']) {
+                    const work = f[role + 'Work'];
+                    if (work && (!Number.isInteger(work.index) || work.index < 0 || work.index > 5 || !['pump', 'formation', 'bedding', 'pipe', 'joint', 'inspect', 'fill', 'compact'].includes(work.type) || !finite([work.elapsed, work.duration, work.volume, work.materialVolume, work.displacement, work.reuseVolume, work.reuseMass, work.applied]) || work.duration <= 0 || !Array.isArray(work.cells) || work.cells.some(cell => !Number.isInteger(cell.index) || cell.index < 0 || cell.index >= terrain.depths.length || !finite([cell.depth, cell.delta])))) throw new Error('Invalid active crew work');
+                }
+            }
             if (p.work && (!Array.isArray(p.work.cells) || p.work.cells.some(cell => !Number.isInteger(cell.index) || cell.index < 0 || cell.index >= terrain.depths.length || !Number.isFinite(cell.depth) || !Number.isFinite(cell.delta)))) throw new Error('Invalid active backfill');
         }
         return restored;
@@ -55,7 +66,7 @@
         try {
             raw = storage.getItem(id);
             if (!raw) return { state: null };
-            try { if (JSON.parse(raw).version > 2) return { state: null, blocked: true }; } catch (_) { /* Try the previous-good copy below. */ }
+            try { if (JSON.parse(raw).version > 3) return { state: null, blocked: true }; } catch (_) { /* Try the previous-good copy below. */ }
             try { return { state: decode(raw, region, fleet) }; }
             catch (_) {
                 const backup = storage.getItem(id + ':backup');
@@ -75,7 +86,7 @@
             }
             catch (error) {
                 if (error.message.startsWith('Site changed')) throw error;
-                try { if (JSON.parse(old).version > 2) throw error; } catch (parseError) { if (!(parseError instanceof SyntaxError)) throw parseError; }
+                try { if (JSON.parse(old).version > 3) throw error; } catch (parseError) { if (!(parseError instanceof SyntaxError)) throw parseError; }
                 const backup = storage.getItem(id + ':backup');
                 if (!backup || storage.getItem(id + ':unreadable')) throw error;
                 decode(backup, state.region.id, state.fleetId);

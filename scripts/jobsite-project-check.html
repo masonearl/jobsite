@@ -9,20 +9,20 @@ function click(id){el(id).focus();el(id).click()}
 function key(type,code='Space'){frame.contentDocument.activeElement.dispatchEvent(new frame.contentWindow.KeyboardEvent(type,{code,key:code==='Space'?' ':code,bubbles:true,cancelable:true}))}
 async function fixture(saved=false,scenario=''){frame=document.createElement('iframe');frame.title='Utility project under test';document.querySelector('#game').replaceChildren(frame);frame.src='/__input-fixture?saved='+saved+'&scenario='+scenario+'&speed=12';await wait(()=>el('project-mobilize'),'World screen unavailable')}
 document.querySelector('#run').onclick=async function(){this.disabled=true;out.textContent='';try{
-    await fixture();click('project-mobilize');await wait(()=>!el('project-strip').hidden&&!el('operate').disabled,'Project launch failed');
-    assert(el('quantity-label').textContent==='Accepted line','HUD still counts haul contracts');assert(el('project-phase').textContent==='Set out and check site','Missing site briefing');log('PASS utility launch and project HUD');
-    el('project-method').value='careful';el('project-method').dispatchEvent(new frame.contentWindow.Event('change',{bubbles:true}));click('order-materials');
-    assert(el('project-delivery').textContent.includes('arriving'),'Order ignored');key('keydown');await delay(2500);key('keyup');click('pause-toggle');
-    const time=el('stat-time').textContent;await delay(500);assert(el('stat-time').textContent===time,'Project clock continued while paused');log('PASS ordering, work method and pause');
-    const moved=el('material-moved').textContent;click('guide-toggle');click('guide-return');click('world-toggle');click('project-mobilize');await wait(()=>!el('project-strip').hidden,'Project not restored');
-    assert(el('material-moved').textContent===moved,'Map return lost construction');log('PASS guide and world return preserve the project');
-    key('keydown');await wait(()=>el('overlay-title').textContent==='Line handed over.','Project did not reach handover',75000);key('keyup');
-    assert(el('stat-tons').textContent==='12 / 12 m','Accepted length incorrect');assert([...el('project-stations').children].every(s=>s.textContent.includes('Accepted')),'A section skipped acceptance');
-    assert(el('overlay-copy').textContent.includes('24 compacted lifts'),'Report missing lift records');assert(!el('project-costs').textContent.includes('NaN'),'Invalid project costs');log('PASS complete 12 m project, six inspections and 24 compacted lifts');
-    key('keydown');key('keyup');assert(!el('world-screen').hidden,'Completed project cannot return to world');log('PASS Space continues from the handover screen');
-    await fixture(true,'project-fill');click('project-mobilize');await wait(()=>!el('project-strip').hidden&&!el('operate').disabled,'Saved backfill could not resume');
-    assert(el('project-phase').textContent.includes('Place backfill'),'Active backfill was lost');key('keydown');key('keyup');await wait(()=>el('project-lift').textContent.includes('1 passes'),'Queued compaction after saved fill did not finish',12000);
-    assert(!el('project-inventory').textContent.includes('NaN'),'Saved inventory invalid');click('pause-toggle');log('PASS saved partial backfill resumes with intact resources');
-    log('ALL 6 PROJECT CHECKS PASSED');
+    await fixture();click('project-mobilize');await wait(()=>!el('flow-board').hidden&&!el('operate').disabled,'Dispatch board unavailable');
+    assert(el('quantity-label').textContent==='Accepted line','HUD still counts haul contracts');assert(el('action-label').textContent==='Start whole spread','Missing one-click dispatch');log('PASS autonomous launch and dispatch board');
+    click('gang-pipe');click('gang-backfill');await delay(800);assert(el('gang-dig-quantity').textContent==='0 / 12 m','Undispatched excavator moved');assert(el('gang-pipe-quantity').textContent==='0 / 12 m','Pipe skipped excavation');click('gang-dig');
+    await wait(()=>el('gang-dig-quantity').textContent!=='0 / 12 m','Excavator requires held input');assert(el('gang-dig').getAttribute('aria-pressed')==='true','Excavator assignment stopped itself');log('PASS independent assignments wait and run without Space');
+    click('gang-pipe');assert(el('gang-pipe').getAttribute('aria-pressed')==='false','Pipe Stop ignored');assert(el('gang-dig').getAttribute('aria-pressed')==='true','Pipe Stop stopped excavation');click('gang-pipe');click('pause-toggle');
+    const time=el('stat-time').textContent;await delay(500);assert(el('stat-time').textContent===time,'Paused project clock continued');log('PASS individual stop and whole-site pause');
+    const moved=el('material-moved').textContent;click('guide-toggle');click('guide-return');click('world-toggle');click('project-mobilize');await wait(()=>!el('flow-board').hidden,'Project not restored');
+    assert(el('material-moved').textContent===moved,'Map return lost construction');assert(el('gang-dig').getAttribute('aria-pressed')==='true','Saved assignments lost');log('PASS guide and world preserve assignments');
+    await wait(()=>el('overlay-title').textContent==='Line handed over.','Autonomous project did not finish',75000);
+    assert(el('stat-tons').textContent==='12 / 12 m','Accepted length incorrect');assert([...el('project-stations').children].every(s=>s.textContent.includes('Accepted')),'Section skipped acceptance');assert(el('overlay-copy').textContent.includes('24 compacted lifts'),'Missing lift records');assert(parseFloat(el('project-spoil').textContent.split('/')[1])>0,'Backfill did not reuse spoil');log('PASS full handover, independent crews, inspected pipe and reused backfill');
+    key('keydown');key('keyup');assert(!el('world-screen').hidden,'Cannot return from handover');
+    await fixture(true,'flow-fill');click('project-mobilize');await wait(()=>!el('flow-board').hidden&&!el('operate').disabled,'Saved backfill not resumed');await wait(()=>el('gang-backfill-quantity').textContent!=='0 / 12 m','Saved backfill did not finish',15000);assert(!el('project-inventory').textContent.includes('NaN'),'Saved resources invalid');click('pause-toggle');log('PASS saved concurrent work resumes without keyboard input');
+    await fixture(true,'project-fill');click('project-mobilize');await wait(()=>!el('flow-board').hidden&&!el('operate').disabled,'Legacy job did not migrate');assert(el('project-inventory').textContent.length>0,'Legacy inventory lost');click('operate');assert(el('gang-dig').getAttribute('aria-pressed')==='true','Whole-spread start failed');click('operate');assert(el('gang-dig').getAttribute('aria-pressed')==='false','Whole-spread stop failed');click('pause-toggle');log('PASS legacy save migration and one-click spread start/stop');
+    log('ALL 7 PROJECT CHECKS PASSED');
 }catch(error){log('FAIL '+error.message);if(el('pause-toggle')?.textContent==='Pause')click('pause-toggle')}finally{this.disabled=false}};
+if(new URLSearchParams(location.search).has('mobile'))fixture(true,'flow-fill').then(()=>{frame.style.width='390px';frame.style.height='844px'});
 </script></html>

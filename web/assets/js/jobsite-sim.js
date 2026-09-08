@@ -42,6 +42,7 @@
         return (d[i] * (1 - u) + d[i + 1] * u) * (1 - w) + (d[i + n + 1] * (1 - u) + d[i + n + 2] * u) * w;
     }
     function bucketPosition(s) {
+        if (s.project?.flow) { const p = s.project.sections[Math.min(5, s.project.flow.digIndex)]; return { x: p.x, z: p.z }; }
         const c = Math.cos(s.machine.heading), sn = Math.sin(s.machine.heading), scale = s.fleet.scale;
         return { x: s.machine.x + (5 * c - .38 * sn) * scale, z: s.machine.z + (-5 * sn - .38 * c) * scale };
     }
@@ -259,7 +260,7 @@
             const dx = ix * step - half - cut.x, dz = iz * step - half - cut.z;
             const along = Math.abs(dx * c - dz * sn), across = Math.abs(dx * sn + dz * c);
             const edge = Math.max(0, Math.min(1, (length - along) / .28, (width - across) / .18));
-            if (!edge) continue;
+            if (!edge || s.project?.flow && (dx < -1 || dx >= 1)) continue;
             const index = iz * (n + 1) + ix;
             const depth = s.terrain.depths[index], available = Math.max(0, limit * edge - depth);
             if (available > 1e-6) cells.push({ index, depth, available, edge });
@@ -278,7 +279,7 @@
         const cut = s.cut;
         if (!cut || progress <= cut.applied) return;
         const fraction = progress - cut.applied;
-        for (const cell of cut.cells) s.terrain.depths[cell.index] = cell.depth + cell.delta * progress;
+        for (const cell of cut.cells) { s.terrain.depths[cell.index] = cell.depth + cell.delta * progress; if (s.project?.flow) (s.terrain.dirty ||= {})[cell.index] = true; }
         cut.applied = progress;
         s.terrain.volume += cut.volume * fraction; s.terrain.mass += s.pendingPayload * fraction;
         s.terrain.revision++;
@@ -311,6 +312,7 @@
     }
     function setProjectMethod(s, method) {
         const p = s.project, section = projectSection(s);
+        if (p?.flow && (p.flow.pipeWork || p.flow.backfillWork)) return false;
         if (!p || p.complete || p.work || !PROJECT_METHODS[method] || section?.stage === 'compact' && section.passes > 0) return false;
         p.method = method; return true;
     }
@@ -332,6 +334,7 @@
         const x0 = Math.max(0, Math.floor((section.x - length + half) / spacing)), x1 = Math.min(TERRAIN.segments, Math.ceil((section.x + length + half) / spacing));
         const z0 = Math.max(0, Math.floor((section.z - width + half) / spacing)), z1 = Math.min(TERRAIN.segments, Math.ceil((section.z + width + half) / spacing));
         for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
+            if (s.project?.flow && (x * spacing - half - section.x < -1 || x * spacing - half - section.x >= 1)) continue;
             const index = z * stride + x, depth = s.terrain.depths[index];
             if (depth > targetDepth) cells.push({ index, depth, delta: depth - targetDepth });
         }
@@ -354,6 +357,7 @@
         return section.stage;
     }
     function projectAction(s) {
+        if (s.project?.flow) return s.project.complete ? 'Project complete' : 'Excavation / pipe / backfill';
         const p = s.project, section = projectSection(s), task = projectTask(s);
         const labels = { survey: 'Set out and check site', excavate: 'Excavate to formation', load: 'Load spoil truck', pump: 'Pump standing water', formation: 'Inspect formation', bedding: 'Place bedding', pipe: 'Set 2 m pipe', joint: 'Connect pipe joint', inspect: 'Inspect pipe before cover', fill: 'Place backfill lift', compact: 'Compact current lift', align: 'Return to set-out station', advance: 'Move to next station', handover: 'Hand over completed line' };
         if (p?.work) return p.work.type === 'compact' ? 'Compacting lift ' + (section.lift + 1) : labels[p.work.type] + '...';
@@ -394,7 +398,7 @@
         if (crewReady || ['survey', 'pump', 'handover'].includes(work.type)) work.elapsed += dt;
         const progress = Math.min(1, work.elapsed / work.duration), delta = progress - work.applied;
         if (delta > 0 && work.cells.length) {
-            for (const cell of work.cells) s.terrain.depths[cell.index] = cell.depth - cell.delta * progress;
+            for (const cell of work.cells) { s.terrain.depths[cell.index] = cell.depth - cell.delta * progress; if (s.project?.flow) (s.terrain.dirty ||= {})[cell.index] = true; }
             p.filledVolume += work.volume * delta; p.materialPlaced += work.materialVolume * delta; p.pipeVolume += work.displacement * delta;
             s.terrain.revision++; work.applied = progress;
         }
@@ -438,6 +442,207 @@
         }
         if (task === 'excavate' || task === 'load') return false;
         startProjectWork(s, task); return true;
+    }
+    // Independent work fronts share the same terrain and material ledger. A stopped
+    // gang finishes its current operation; a paused shift freezes every operation.
+    function enableAutonomy(s) {
+        const p = s.project;
+        if (!p || p.flow || p.complete) return !!p;
+        if (s.phase === 'digging') { const removed = s.pendingPayload * s.cut.applied; s.bucket += removed; s.excavated += removed; }
+        s.phase = 'idle'; s.phaseTime = 0; s.cut = null; s.advance = null;
+        s.primaryHeld = s.operateHeld = s.operationQueued = false;
+        p.sections.forEach(section => { section.excavated = section.stage !== 'excavate'; });
+        const first = p.sections.findIndex(section => !section.excavated);
+        p.flow = { running: { dig: false, pipe: false, backfill: false }, digIndex: first < 0 ? 6 : first,
+            pipeWork: null, backfillWork: null, briefing: 0, openLimit: 5, mobilized: false,
+            spoilVolume: 0, spoilMass: 0, reusedVolume: 0, reusedMass: 0, retainedVolume: 0,
+            bank: p.sections.map(section => ({ x: section.x, z: section.z + 2.6 * s.fleet.scale, volume: 0, mass: 0 })),
+            bucketVolume: s.bucket / soil(s).density, dump: 'truck', messages: {},
+            backhoe: { x: p.sections[0].x + 5, z: p.sections[0].z + 3.6, heading: Math.PI / 2 } };
+        if (p.work) {
+            const work = p.work; work.index = p.active;
+            work.method = p.method; work.requiredPasses = PROJECT_METHODS[p.method].passes + (s.region.biome === 'forest' ? 1 : 0);
+            work.reuseVolume = work.reuseMass = 0;
+            if (['fill', 'compact'].includes(work.type)) { p.flow.backfillWork = work; p.flow.mobilized = true; }
+            else if (work.type !== 'survey' && work.type !== 'handover') p.flow.pipeWork = work;
+            else p.flow.briefing = work.elapsed;
+            p.work = null;
+        }
+        const section = p.sections[Math.min(5, p.flow.digIndex)];
+        s.machine = { x: section.x - (p.flow.digIndex === 6 ? 4 : 0), z: section.z + 5 * s.fleet.scale, heading: 0 };
+        s.targetHeading = 0; s.haulSide = 1; s.truckPose = flowTruckPad(s); s.truckHeading = Math.PI; s.truckRoute = [];
+        s.safetyStop = s.clearingCrew = s.haulBlocked = s.truckParked = false; s.recovery = null;
+        s.crew = s.crew.map((_, i) => ({ x: p.sections[0].x + 3 + i * .8, z: p.sections[0].z - 2 }));
+        s.plan = { x: p.sections[0].x, z: p.sections[0].z, heading: 0, sections: 6, depth: PIPE.depth, width: 1.56 * s.fleet.scale };
+        s.message = 'Dispatch the spread: excavator digs ahead, pipe crew follows, backfill follows inspected pipe.';
+        return true;
+    }
+    function setGang(s, role, running) {
+        const f = s?.project?.flow;
+        if (!f || s.project.complete || s.status !== 'playing' || !Object.hasOwn(f.running, role)) return false;
+        f.running[role] = !!running;
+        if (role === 'backfill' && running) f.mobilized = true;
+        s.message = running ? 'Assignment started. The crew will wait for its work front to become available.' : 'Assignment stopped. The current operation will finish before parking.';
+        return true;
+    }
+    function setSpreadRunning(s, running) { for (const role of ['dig', 'pipe', 'backfill']) setGang(s, role, running); }
+    function flowTruckPad(s) { return { x: s.machine.x, z: s.project.sections[0].z + 10.5 * s.fleet.scale }; }
+    function flowProgress(s) {
+        const sections = s.project.sections;
+        return { excavated: sections.filter(p => p.excavated).length, piped: sections.filter(p => p.inspected).length, backfilled: sections.filter(p => p.accepted).length };
+    }
+    function moveFlowActor(actor, target, speed, dt) {
+        const dx = target.x - actor.x, dz = target.z - actor.z, distance = Math.hypot(dx, dz), travel = Math.min(distance, speed * dt);
+        actor.x += dx / (distance || 1) * travel; actor.z += dz / (distance || 1) * travel;
+        return distance <= travel + .02;
+    }
+    function flowTask(section, role) {
+        if (role === 'backfill') return section.stage === 'compact' ? 'compact' : 'fill';
+        if (section.stage === 'excavate') return section.water > .03 ? 'pump' : 'formation';
+        return section.stage;
+    }
+    function startFlowWork(s, role, index) {
+        const p = s.project, f = p.flow, section = p.sections[index], type = flowTask(section, role);
+        let cells = [], volume = 0, displacement = 0, material = null, reuseVolume = 0, reuseMass = 0;
+        if (type === 'bedding' || type === 'fill') {
+            const depth = type === 'bedding' ? .8 : Math.max(0, .8 - (section.lift + 1) * .2);
+            cells = fillCells(s, section, depth); volume = cells.reduce((sum, cell) => sum + cell.delta, 0) * (TERRAIN.size / TERRAIN.segments) ** 2;
+            displacement = type === 'fill' ? pipeDisplacement(.8 - section.lift * .2, depth) : 0;
+            material = type === 'bedding' ? 'bedding' : 'fill';
+            if (type === 'fill' && section.lift >= 2) reuseVolume = Math.min(f.spoilVolume, Math.max(0, volume - displacement));
+        } else if (type === 'pipe') { material = 'pipe'; volume = 1; }
+        const needed = Math.max(0, volume - displacement - reuseVolume);
+        if (material && p.inventory[material] + 1e-6 < needed) {
+            if (!p.delivery) orderMaterials(s);
+            f.messages[role] = 'Waiting for ' + material + ' delivery'; return false;
+        }
+        if (material) p.inventory[material] = Math.max(0, p.inventory[material] - needed);
+        if (reuseVolume) {
+            let remaining = reuseVolume;
+            for (const pile of f.bank) { const take = Math.min(remaining, pile.volume), mass = pile.volume ? pile.mass * take / pile.volume : 0; pile.volume -= take; pile.mass -= mass; remaining -= take; reuseMass += mass; }
+            f.spoilVolume = Math.max(0, f.spoilVolume - reuseVolume); f.spoilMass = Math.max(0, f.spoilMass - reuseMass);
+        }
+        const duration = ({ pump: 5, formation: 3, bedding: 4, pipe: 6, joint: 3, inspect: 3, fill: 5, compact: 2.5 })[type] * PROJECT_METHODS[p.method].duration;
+        f[role + 'Work'] = { type, index, target: { ...section, y: -.62, length: 2 }, elapsed: 0, duration, cells,
+            volume: type === 'pipe' ? 0 : volume, displacement, applied: 0, materialVolume: material && type !== 'pipe' ? needed : 0,
+            reuseVolume, reuseMass, method: p.method, requiredPasses: PROJECT_METHODS[p.method].passes + (s.region.biome === 'forest' ? 1 : 0) };
+        return true;
+    }
+    function stepFlowWork(s, role, dt, ready) {
+        const p = s.project, f = p.flow, work = f[role + 'Work']; if (!work) return;
+        const section = p.sections[work.index];
+        if (ready) work.elapsed += dt;
+        const progress = Math.min(1, work.elapsed / work.duration), delta = progress - work.applied;
+        if (delta > 0 && work.cells.length) {
+            for (const cell of work.cells) { s.terrain.depths[cell.index] = cell.depth - cell.delta * progress; if (s.project?.flow) (s.terrain.dirty ||= {})[cell.index] = true; }
+            p.filledVolume += work.volume * delta; p.materialPlaced += work.materialVolume * delta; p.pipeVolume += work.displacement * delta;
+            f.reusedVolume += work.reuseVolume * delta; f.reusedMass += work.reuseMass * delta;
+            work.applied = progress; s.terrain.revision++;
+        }
+        f.messages[role] = work.type + ' / ' + work.index * 2 + '-' + (work.index * 2 + 2) + ' m';
+        if (progress < 1) return;
+        const type = work.type;
+        if (type === 'pump') { section.water = 0; p.pumping = true; }
+        if (type === 'formation') { section.stage = 'bedding'; section.formation = .9; }
+        if (type === 'bedding') { section.stage = 'pipe'; section.bedded = true; }
+        if (type === 'pipe') {
+            section.pipeIndex = s.utilities.pipes.length; s.utilities.pipes.push({ x: section.x, z: section.z, y: -.62, heading: 0, length: 2, buried: false });
+            section.stage = work.index ? 'joint' : 'inspect';
+        }
+        if (type === 'joint') {
+            const previous = p.sections[work.index - 1];
+            s.utilities.joints.push({ key: previous.pipeIndex + ':' + section.pipeIndex, x: (previous.x + section.x) / 2, z: section.z, y: -.62, heading: 0 }); section.stage = 'inspect';
+        }
+        if (type === 'inspect') { section.inspected = true; section.stage = 'fill'; }
+        if (type === 'fill') { section.stage = 'compact'; section.passes = 0; section.requiredPasses = work.requiredPasses; section.filled = .2 * (section.lift + 1); }
+        if (type === 'compact' && ++section.passes >= (section.requiredPasses || work.requiredPasses)) {
+            section.lift++; section.stage = section.lift === 4 ? 'accepted' : 'fill';
+            if (section.lift === 4) { section.accepted = true; s.utilities.pipes[section.pipeIndex].buried = true; p.earned += 600; s.skills.joiner += 12; }
+        }
+        const oldActive = p.active; p.active = work.index;
+        projectLog(s, (role === 'pipe' ? 'Pipe crew' : 'Backfill crew') + ': ' + type + ' complete at ' + work.index * 2 + '-' + (work.index * 2 + 2) + ' m.');
+        p.active = oldActive; f[role + 'Work'] = null; s.event++;
+    }
+    function stepSpread(s, dt) {
+        const p = s.project, f = p.flow, progress = flowProgress(s);
+        p.elapsed += dt;
+        const active = Object.values(f.running).filter(Boolean).length;
+        p.costs.plant += dt / 60 * (8 + active * 16 + (p.pumping ? 4 : 0));
+        s.fuel += dt / 3600 * engine(s).fuel * (s.phase === 'idle' ? .25 : 1);
+        if (p.delivery) { p.delivery.elapsed += dt; if (p.delivery.elapsed >= p.delivery.duration) { p.inventory.pipe += 6; p.inventory.bedding += 2; p.inventory.fill += 8; p.delivered++; p.delivery = null; projectLog(s, 'Materials delivery received.'); } }
+        if (!p.checked) {
+            if (active) f.briefing += dt;
+            f.messages = { dig: 'Set-out briefing / start an assignment', pipe: 'Waiting for set-out and excavation', backfill: 'Waiting for 6 m of excavation and inspected pipe' };
+            if (f.briefing >= 4) { p.checked = true; projectLog(s, 'Set-out complete. Independent work fronts released.'); }
+            return;
+        }
+        // The excavator travels on the side of the line; its upper works reach across.
+        const index = Math.min(5, f.digIndex), section = p.sections[index]; p.active = index;
+        const target = { x: section.x - (f.digIndex === 6 ? 4 : 0), z: section.z + 5 * s.fleet.scale };
+        const open = progress.excavated - progress.backfilled;
+        let aligned = Math.hypot(s.machine.x - target.x, s.machine.z - target.z) < .02;
+        if (s.phase === 'idle' && !s.bucket && !aligned) aligned = moveFlowActor(s.machine, target, 1.7 / s.fleet.speed, dt);
+        f.messages.dig = !f.running.dig ? 'Stopped / finish current bucket' : f.digIndex === 6 ? '12 m excavated / parked clear' : open >= f.openLimit && !s.bucket ? 'Waiting: 10 m open / backfill must catch up' : !aligned ? 'Tracking alongside the trench' : s.phase === 'idle' ? 'Excavating station ' + index * 2 + '-' + (index * 2 + 2) + ' m' : s.phase + (f.dump === 'spoil' ? ' / retaining spoil' : ' / truck loading');
+        const pad = flowTruckPad(s);
+        if (s.truckState !== 'waiting') {
+            s.truckTime += dt;
+            if (s.truckState === 'hauling' && s.truckTime >= 2) { s.truckState = 'returning'; s.truckTime = 0; s.truck = 0; }
+            else if (s.truckState === 'returning' && s.truckTime >= haulDuration(s)) { s.truckState = 'waiting'; s.truckTime = 0; }
+        }
+        const offset = s.truckState === 'hauling' ? Math.min(1, s.truckTime / 2) * 32 : s.truckState === 'returning' ? (1 - Math.min(1, s.truckTime / haulDuration(s))) * 32 : 0;
+        moveFlowActor(s.truckPose, { x: pad.x - offset, z: pad.z }, 18, dt);
+        s.truckHeading = s.truckState === 'returning' ? 0 : Math.PI;
+        if (s.phase === 'idle' && s.bucket) {
+            if (f.dump === 'spoil' || s.truckState === 'waiting' && Math.hypot(s.truckPose.x - pad.x, s.truckPose.z - pad.z) < .2) { s.phase = 'swinging'; s.phaseTime = 0; }
+            else f.messages.dig = 'Waiting for haul truck / bucket held';
+        } else if (s.phase === 'idle' && aligned && f.running.dig && f.digIndex < 6 && open < f.openLimit) {
+            const cut = { x: section.x, z: section.z, heading: 0, applied: 0, depth: groundDepth(s, section.x, section.z) };
+            s.pendingPayload = planCut(s, cut, bucketCapacity(s) * .8);
+            if (s.pendingPayload < .001) { section.excavated = true; f.digIndex++; s.graded.push({ x: section.x, z: section.z }); }
+            else { s.cut = cut; s.phase = 'digging'; s.phaseTime = 0; s.biteSoil = s.region.layers[Math.min(2, index % 3)]; s.terrain.cuts++; s.digs++; f.bucketVolume = cut.volume; f.dump = f.spoilVolume < 6 ? 'spoil' : 'truck'; }
+        }
+        if (s.phase !== 'idle') {
+            s.phaseTime += dt;
+            if (s.phase === 'digging') {
+                excavate(s, Math.min(1, s.phaseTime / (digDuration(s) * 4)));
+                if (s.cut.applied >= 1) { s.bucket = s.pendingPayload; s.excavated += s.bucket; s.phase = 'idle'; s.phaseTime = 0; }
+            } else if (s.phase === 'swinging' && s.phaseTime >= .8) { s.phase = 'dumping'; s.phaseTime = 0; }
+            else if (s.phase === 'dumping' && s.phaseTime >= .45) {
+                if (f.dump === 'spoil') {
+                    const bank = f.bank[index]; bank.volume += f.bucketVolume; bank.mass += s.bucket;
+                    f.spoilVolume += f.bucketVolume; f.retainedVolume += f.bucketVolume; f.spoilMass += s.bucket; s.bucket = 0; f.bucketVolume = 0;
+                } else {
+                    const payload = Math.min(s.bucket, s.fleet.capacity - s.truck), volume = f.bucketVolume * payload / s.bucket;
+                    s.truck += payload; s.bucket -= payload; f.bucketVolume -= volume;
+                    if (s.truck >= s.fleet.capacity - 1e-5) { s.hauled += s.truck; s.terrain.dispatched += s.truck; s.credits += s.region.payout; p.costs.haul += 35 * s.region.payout / 100; s.truckState = 'hauling'; s.truckTime = 0; }
+                }
+                s.phase = 'returning'; s.phaseTime = 0; s.event++;
+            } else if (s.phase === 'returning' && s.phaseTime >= .65) { s.phase = 'idle'; s.phaseTime = 0; }
+        }
+        const pipeIndex = p.sections.findIndex(section => !section.inspected);
+        const pipeSection = p.sections[pipeIndex];
+        const pipeClear = pipeSection?.excavated && (f.digIndex >= pipeIndex + 2 || f.digIndex === 6) && Math.abs(s.machine.x - pipeSection.x) >= 3;
+        if (!f.pipeWork && f.running.pipe && pipeClear) startFlowWork(s, 'pipe', pipeIndex);
+        if (!f.pipeWork) f.messages.pipe = pipeIndex < 0 ? '12 m pipe inspected / complete' : !f.running.pipe ? 'Stopped / waiting for dispatch' : !pipeClear ? 'Waiting for excavation to move ahead' : f.messages.pipe;
+        const crewTarget = f.pipeWork?.target || (pipeSection ? { x: pipeSection.x + 2, z: pipeSection.z - 2 } : { x: p.sections[5].x - 3, z: p.sections[5].z - 3 });
+        let crewReady = true;
+        s.crew.forEach((person, i) => { if (!moveFlowActor(person, { x: crewTarget.x + (i - 1) * .55, z: crewTarget.z - .45 }, 2.4, dt)) crewReady = false; });
+        stepFlowWork(s, 'pipe', dt, crewReady);
+        const fillIndex = p.sections.findIndex(section => !section.accepted), fillSection = p.sections[fillIndex];
+        const fillClear = fillSection?.inspected && progress.excavated >= 3 && (pipeIndex < 0 || pipeIndex >= fillIndex + 2) && s.crew.every(person => Math.hypot(person.x - fillSection.x, person.z - fillSection.z) > 2.5);
+        if (!f.backfillWork && f.running.backfill && fillClear) startFlowWork(s, 'backfill', fillIndex);
+        if (!f.backfillWork) f.messages.backfill = fillIndex < 0 ? '12 m backfilled / complete' : !f.running.backfill ? 'Backhoe parked / dispatch when ready' : progress.excavated < 3 ? 'Waiting for 6 m of excavation' : !fillClear ? 'Waiting for inspected pipe and crew clearance' : f.messages.backfill;
+        const backTarget = f.backfillWork?.target;
+        const backReady = !backTarget || moveFlowActor(f.backhoe, { x: backTarget.x, z: backTarget.z + 3.6 }, 1.8, dt);
+        stepFlowWork(s, 'backfill', dt, backReady);
+        if (f.digIndex === 6 && s.phase === 'idle' && !s.bucket && s.truckState === 'waiting' && s.truck > 0) {
+            s.hauled += s.truck; s.terrain.dispatched += s.truck; s.credits += s.region.payout * s.truck / s.fleet.capacity;
+            p.costs.haul += 35 * s.region.payout / 100; s.truckState = 'hauling'; s.truckTime = 0;
+        }
+        if (p.sections.every(section => section.accepted) && s.phase === 'idle' && !s.bucket && s.truckState === 'waiting' && !s.truck) {
+            p.complete = true; s.status = 'won'; f.running = { dig: false, pipe: false, backfill: false }; s.event++;
+            projectLog(s, '12 m handed over. Excavation, pipe and backfill crews have completed their assignments.');
+        }
     }
     function createState(level = 0, practice = false, previous = null, regionId, fleetId) {
         const region = regionById(regionId || previous?.region.id || 'utah');
@@ -620,6 +825,7 @@
     }
     function setPrimaryHeld(s, held, cancel = false) {
         if (!s) return;
+        if (s.project?.flow) { if (held) { if (s.status === 'paused') { pause(s); if (Object.values(s.project.flow.running).some(Boolean)) return; } setSpreadRunning(s, !Object.values(s.project.flow.running).some(Boolean)); } return; }
         if (held) {
             if (s.status === 'ready') start(s);
             if (s.status === 'paused') pause(s);
@@ -640,6 +846,7 @@
         if (s.status === 'ready') return 'Start shift';
         if (s.status === 'lost') return 'New shift / keep site';
         if (s.status === 'won') return s.level === 2 ? 'Choose next site' : 'Next contract';
+        if (s.project?.flow) return Object.values(s.project.flow.running).some(Boolean) ? 'Stop whole spread' : 'Start whole spread';
         if (s.recovery) return 'Recovering spread...';
         if (s.project?.work) return projectAction(s);
         if (s.safetyStop) return s.clearingCrew ? 'Crew clearing...' : 'Clear crew and continue';
@@ -672,6 +879,7 @@
         let remaining = dt;
         while (remaining > 0 && s.status === 'playing') {
             const d = Math.min(remaining, .05); remaining -= d; s.elapsed += d;
+            if (s.project?.flow) { stepSpread(s, d); continue; }
             const working = s.phase !== 'idle' || s.drive.x || s.drive.z || s.advance;
             s.fuel += d / 3600 * engine(s).fuel * (working ? 1 : .25);
             s.energy = Math.max(0, s.energy - d / (working || s.utilities.work ? 6 : 30));
@@ -781,5 +989,5 @@
             if (s.status !== 'playing') { s.operateHeld = false; s.primaryHeld = false; s.operationQueued = false; s.history.push({ level: s.level, result: s.status, hauled: s.hauled, elapsed: s.elapsed }); }
         }
     }
-    return { PROJECT_STAGES, PROJECT_METHODS, projectSection, startProject, projectCost, setProjectMethod, orderMaterials, projectTask, projectAction, startProjectWork, REGIONS, FLEETS, SOILS, CONTRACTS, TERRAIN, PIPE, THROTTLES, engine, setThrottle, crewLevel, crewTag, crewActivity, crewHome, truckPosition, truckPathClear, switchTruckSide, clearCrew, setPlan, planSections, regionById, soil, bucketCapacity, bucketPosition, groundDepth, setDrive, canTravel, turn, backUp, trenchStatus, pipeCandidate, connectionCandidate, startPipeWork, digDuration, haulDuration, timingPeriod, createState, start, press, release, cancelCharge, setOperateHeld, setPrimaryHeld, primaryAction, pause, buy, step, meter };
+    return { enableAutonomy, setGang, setSpreadRunning, flowProgress, PROJECT_STAGES, PROJECT_METHODS, projectSection, startProject, projectCost, setProjectMethod, orderMaterials, projectTask, projectAction, startProjectWork, REGIONS, FLEETS, SOILS, CONTRACTS, TERRAIN, PIPE, THROTTLES, engine, setThrottle, crewLevel, crewTag, crewActivity, crewHome, truckPosition, truckPathClear, switchTruckSide, clearCrew, setPlan, planSections, regionById, soil, bucketCapacity, bucketPosition, groundDepth, setDrive, canTravel, turn, backUp, trenchStatus, pipeCandidate, connectionCandidate, startPipeWork, digDuration, haulDuration, timingPeriod, createState, start, press, release, cancelCharge, setOperateHeld, setPrimaryHeld, primaryAction, pause, buy, step, meter };
 });
