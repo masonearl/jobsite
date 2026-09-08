@@ -12,6 +12,14 @@
     let lastSave = 0, lastHud = 0, lastDraw = 0, storage = null;
     try { storage = window.localStorage; } catch (_) { /* The saved-state indicator explains unavailable storage. */ }
     function clearOperate() { inputSource = null; Sim.setOperateHeld(state, false, true); }
+    function focusGame() {
+        if (sceneReady && !onMap && !onGuide && state?.status === 'playing') canvas.focus({ preventScroll: true });
+    }
+    function gameplayFocus() {
+        const target = document.activeElement;
+        if (target === canvas || target === $('operate') || target === document.body) return true;
+        return app.contains(target) && !target.closest('a, button, input, select, textarea, summary, [contenteditable], [role="textbox"]');
+    }
     function saveJob() {
         if (!state) return;
         jobs.set(state.region.id + ':' + state.fleetId, state);
@@ -108,7 +116,7 @@
         } catch (_) {
             text('display-status', 'Use Esc or your browser controls to leave fullscreen.');
             $('display-status').hidden = false;
-        } finally { displayPending = false; syncDisplay(); }
+        } finally { displayPending = false; syncDisplay(); focusGame(); }
     }
     $('fullscreen-toggle').addEventListener('click', toggleFullscreen);
     $('equipment-toggle').addEventListener('click', () => { const open = app.classList.toggle('show-equipment'); $('equipment-toggle').setAttribute('aria-expanded', String(open)); });
@@ -276,8 +284,9 @@
         const m = state.phase === 'charging' ? Sim.meter(state) : 0;
         $('meter-needle').style.left = m * 100 + '%'; $('bite-meter').setAttribute('aria-valuenow', Math.round(m * 100));
         text('bite-quality', state.phase === 'charging' ? 'Release in zone: skill bonus' : state.lastQuality || 'Hold: steady / release in zone: full');
-        text('action-label', Math.abs(state.targetHeading - state.machine.heading) > .02 ? 'Turning...' : state.utilities.work ? 'Pipe crew working' : state.phase === 'charging' ? 'Release to dig' : state.phase !== 'idle' ? 'Cycling...' : state.bucket > 0 ? 'Load truck' : 'Hold to dig');
-        text('action-help', state.operateHeld ? 'Repeating / release Space to stop' : state.bucket > 0 ? 'Press to load / hold Space to repeat' : 'Hold Space to repeat / button for timing');
+        const atGrade = state.alignment && state.phase === 'idle' && !state.bucket && (bed.ready || bed.installed || bed.min >= Sim.PIPE.depth - .02);
+        text('action-label', Math.abs(state.targetHeading - state.machine.heading) > .02 ? 'Turning...' : state.utilities.work ? 'Pipe crew working' : state.phase === 'charging' ? 'Release to dig' : state.phase !== 'idle' ? 'Cycling...' : state.bucket > 0 ? 'Load truck' : atGrade ? bed.installed ? 'Pipe installed' : 'At pipe grade' : 'Hold to dig');
+        text('action-help', atGrade ? bed.installed ? 'Back up 2 m to extend the trench' : 'Install pipe or back up 2 m to continue' : state.operateHeld ? 'Repeating / release Space to stop' : state.bucket > 0 ? 'Press to load / hold Space to repeat' : 'Hold Space to repeat / button for timing');
         $('operate').disabled = !sceneReady || state.status !== 'playing' || state.safetyStop || !!state.utilities.work || !!state.crewActivity || Math.abs(state.targetHeading - state.machine.heading) > .02;
         $('pause-toggle').disabled = !sceneReady || !['playing', 'paused'].includes(state.status); text('pause-toggle', state.status === 'paused' ? 'Resume' : 'Pause');
         ['bucket', 'dispatch'].forEach(key => {
@@ -295,11 +304,11 @@
         else if (state.status === 'won') { state = Sim.createState(state.level + 1, false, state); Sim.start(state); }
         else if (state.status === 'lost') { state = Sim.createState(state.level, false, state); Sim.start(state); }
         else Sim.start(state);
-        lastStatus = ''; hud(); saveJob(); $('operate').focus({ preventScroll: true });
+        lastStatus = ''; hud(); saveJob(); focusGame();
     }
     $('start-shift').addEventListener('click', startShift);
-    $('practice').addEventListener('click', () => { clearOperate(); state = Sim.createState(state.level, true, state); Sim.start(state); lastStatus = ''; hud(); saveJob(); $('operate').focus({ preventScroll: true }); });
-    function pause() { if (!state || onMap || onGuide) return; clearOperate(); stopTravel(); Sim.pause(state); hud(); saveJob(); }
+    $('practice').addEventListener('click', () => { clearOperate(); state = Sim.createState(state.level, true, state); Sim.start(state); lastStatus = ''; hud(); saveJob(); focusGame(); });
+    function pause() { if (!state || onMap || onGuide) return; clearOperate(); stopTravel(); Sim.pause(state); hud(); saveJob(); focusGame(); }
     $('pause-toggle').addEventListener('click', pause);
     $('restart-job').addEventListener('click', () => { clearOperate(); state = Sim.createState(state.level, state.practice, state); lastStatus = ''; hud(); saveJob(); });
     $('throttle').addEventListener('change', e => { Sim.setThrottle(state, e.target.value); hud(); saveJob(); canvas.focus({ preventScroll: true }); });
@@ -319,9 +328,14 @@
     $('sound-toggle').addEventListener('click', async () => {
         try { if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === 'suspended') await audio.resume(); sound = !sound; $('sound-toggle').setAttribute('aria-pressed', String(sound)); text('sound-toggle', sound ? 'Sound on' : 'Sound off'); tone(240, .12); }
         catch (_) { text('sound-toggle', 'Sound unavailable'); }
+        finally { focusGame(); }
     });
     for (const name of ['drive', 'crew']) $(name + '-menu').addEventListener('click', e => { const open = e.currentTarget.parentElement.classList.toggle('is-open'); e.currentTarget.setAttribute('aria-expanded', String(open)); stopTravel(); });
     const operate = $('operate');
+    // Game actions return control to the machine. Tab-focused controls retain native keyboard activation.
+    app.addEventListener('click', e => {
+        if (!e.target.closest('a, input, select, textarea, summary, [contenteditable], [role="textbox"], #operate')) focusGame();
+    });
     operate.addEventListener('pointerdown', e => { if (e.button !== 0 || inputSource || !sceneReady) return; e.preventDefault(); operate.focus({ preventScroll: true }); operate.setPointerCapture(e.pointerId); inputSource = 'pointer'; Sim.press(state); hud(); });
     operate.addEventListener('pointerup', e => { if (inputSource !== 'pointer') return; inputSource = null; Sim.release(state); if (operate.hasPointerCapture(e.pointerId)) operate.releasePointerCapture(e.pointerId); hud(); });
     const cancel = () => { inputSource = null; if (state) Sim.cancelCharge(state); hud(); };
@@ -337,13 +351,13 @@
         button.addEventListener('pointerup', release); button.addEventListener('pointercancel', release); button.addEventListener('lostpointercapture', release);
     });
     document.addEventListener('keydown', e => {
-        if (!onMap && !onGuide && sceneReady && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.code) && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+        if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || onMap || onGuide || !sceneReady || !gameplayFocus()) return;
+        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.code)) {
             e.preventDefault(); beginTravel(e.code); canvas.focus({ preventScroll: true }); return;
         }
-        if (onMap || onGuide || !sceneReady || ![canvas, operate].includes(document.activeElement)) return;
         if (e.code === 'KeyP') { e.preventDefault(); if (!e.repeat) pause(); return; }
-        if (e.code !== 'Space') return; e.preventDefault(); if (e.repeat || inputSource) return;
-        inputSource = 'key'; Sim.setOperateHeld(state, true); hud();
+        if (e.code !== 'Space') return; e.preventDefault(); if (state.status !== 'playing' || e.repeat || inputSource) return;
+        focusGame(); inputSource = 'key'; Sim.setOperateHeld(state, true); hud();
     });
     document.addEventListener('keyup', e => { if (e.code !== 'Space' || inputSource !== 'key') return; e.preventDefault(); inputSource = null; Sim.setOperateHeld(state, false); hud(); });
     document.addEventListener('keyup', e => travelKeys.delete(e.code));

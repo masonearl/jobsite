@@ -26,7 +26,7 @@ There is no build step, account, API key, backend service, or package install ne
 
 - **Up:** drive forward toward the bucket. **Down:** reverse. Release to stop.
 - **Left / Right:** turn the machine. Trench assist makes a quarter turn per press and stops cuts at the 0.90 m pipe bed; turn it off for free steering and deeper cuts.
-- **Space:** hold to repeat steady dig/load cycles at 80% bucket capacity. Release in the marked zone for a full single bite and cash bonus. Release stops new cycles; the current animation finishes. The scene or operation button must have keyboard focus.
+- **Space:** hold to repeat steady dig/load cycles at 80% bucket capacity. Release in the marked zone for a full single bite and cash bonus. Release stops new cycles; the current animation finishes. Resume and game controls return keyboard focus to the scene. Tab-focused buttons and text fields keep their normal keyboard behavior.
 - **Back up 2 m:** move one pipe length in reverse while keeping the trench aligned.
 - **Install 2 m pipe:** available after the bed is within the target depth tolerance and the bucket is empty. Install an adjoining section, then **Connect joint**.
 - **Site plan:** show a saved pipe-corridor layout over the actual terrain. Planned, on-grade and installed sections have different colors. **Plan from bucket** aligns a new plan with the current machine heading.
@@ -60,6 +60,8 @@ Run the simulation checks with Node.js 22 or later:
 ```sh
 npm test
 ```
+
+To check the browser input path, run `python3 scripts/serve-jobsite-input-check.py` and open `http://127.0.0.1:4181/__input-check`. Select **Run input checks**. These six real-page checks cover saved-site Resume, sustained Space, repeat and release, toolbar focus, guide/world return, typing, crew drills and at-grade feedback. Timed holds use synthetic keyboard events. The fixture uses in-memory saves and does not modify your browser's saved jobs. Also check physical Space keypresses after Resume and fullscreen in your target browser.
 
 - `web/index.html`: game and learning guide.
 - `web/assets/js/jobsite-sim.js`: deterministic production, movement, terrain, and pipe-work state.

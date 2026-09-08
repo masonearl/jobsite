@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Jobsite keyboard regression checks</title>
+<style>body{font:14px system-ui;background:#152018;color:#eef2e9;margin:20px}button{padding:12px}iframe{width:100%;height:720px;border:1px solid #76846c}pre{white-space:pre-wrap}</style>
+<h1>Jobsite keyboard regression checks</h1>
+<p>Tests the real page and its event handlers. Timed holds use synthetic keyboard events. Clicks deliberately focus the clicked control first, matching a mouse click. Each iframe uses an isolated in-memory save; browser saves are untouched.</p>
+<button id="run">Run input checks</button><pre id="results">Ready.</pre><div id="game"></div>
+<script>
+const out = document.querySelector('#results');
+let frame, failures = 0;
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const doc = () => frame.contentDocument, el = id => doc().getElementById(id);
+const log = text => out.textContent += text + '\n';
+const assert = (condition, message) => { if (!condition) throw Error(message); };
+async function wait(fn, message, limit = 15000) {
+    const start = Date.now();
+    while (!fn()) { if (Date.now() - start > limit) throw Error(message); await delay(80); }
+}
+function click(id) {
+    const button = el(id);
+    assert(button && !button.disabled, 'Control unavailable: ' + id);
+    button.focus({ preventScroll: true }); button.click();
+}
+function key(type, code = 'Space', options = {}) {
+    const event = new frame.contentWindow.KeyboardEvent(type, { code, key: code === 'Space' ? ' ' : code, bubbles: true, cancelable: true, ...options });
+    doc().activeElement.dispatchEvent(event);
+    return event.defaultPrevented;
+}
+const cuts = () => parseInt(el('cut-count').textContent, 10);
+const focused = () => doc().activeElement === el('jobsite-canvas');
+const release = () => key('keyup');
+const idle = () => !['Cycling...', 'Release to dig'].includes(el('action-label').textContent);
+async function fixture(saved = true) {
+    frame = document.createElement('iframe'); frame.title = 'Game under test';
+    document.querySelector('#game').replaceChildren(frame); frame.src = '/__input-fixture?saved=' + saved;
+    await wait(() => el('mobilize')?.textContent === (saved ? 'Return to saved site' : 'Mobilize to site'), 'World selector failed');
+    const label = el('region-record').textContent;
+    click('mobilize'); await wait(() => !el('start-shift').disabled, 'Scene did not initialize');
+    return label;
+}
+async function check(name, run) {
+    try { await run(); log('PASS ' + name); }
+    catch (error) { failures++; log('FAIL ' + name + ': ' + error.message); }
+    finally { if (el('pause-toggle')?.textContent === 'Pause' && !el('pause-toggle').disabled) click('pause-toggle'); }
+}
+document.querySelector('#run').onclick = async function () {
+    this.disabled = true; failures = 0; out.textContent = '';
+    await check('Saved-site return, top Resume, sustained Space, OS repeat and key release', async () => {
+        await fixture(); const before = cuts();
+        click('pause-toggle'); assert(focused(), 'Top Resume kept focus on its button');
+        const scroll = frame.contentWindow.scrollY;
+        assert(key('keydown'), 'Space was not consumed');
+        for (let i = 0; i < 8; i++) { await delay(100); assert(key('keydown', 'Space', {repeat:true}), 'Repeat scrolled page'); }
+        await delay(6200); assert(cuts() >= before + 2, 'Held Space did not repeat cuts');
+        assert(frame.contentWindow.scrollY === scroll, 'Space scrolled the game');
+        release(); const stopped = cuts(); await delay(3500);
+        assert(cuts() === stopped, 'Release scheduled another cut');
+        assert(el('pause-toggle').textContent === 'Pause', 'Space paused the game');
+    });
+    await check('Fresh shift, body focus and native keyboard controls', async () => {
+        await fixture(false); click('practice'); assert(focused(), 'Free dig did not focus the scene');
+        el('jobsite-canvas').blur(); assert(doc().activeElement === doc().body, 'Fixture did not reach body focus');
+        const before = cuts(); assert(key('keydown'), 'Body-focused Space was ignored'); await delay(1600); release();
+        assert(cuts() > before, 'Body-focused hold did not dig'); await delay(3000);
+        el('sound-toggle').focus(); assert(!key('keydown'), 'A Tab-focused button lost its native Space action'); release();
+        const input = doc().createElement('input'); el('jobsite-app').append(input); input.focus();
+        assert(!key('keydown'), 'Space was captured while typing'); release(); input.remove();
+        el('jobsite-canvas').focus(); assert(!key('keydown', 'Space', {ctrlKey:true}), 'Control shortcut was captured'); release();
+    });
+    await check('Header pause/resume and focus changes cancel the previous hold', async () => {
+        await fixture(); click('start-shift'); const before = cuts();
+        key('keydown'); await delay(120); click('pause-toggle'); release(); click('pause-toggle');
+        assert(focused(), 'Header Resume did not return control'); await delay(1800);
+        assert(cuts() === before, 'Resume retained the old hold');
+        key('keydown'); await delay(120); el('guide-toggle').focus(); release(); await delay(1800);
+        assert(cuts() === before, 'Tab focus change did not cancel charging');
+        el('jobsite-canvas').focus(); key('keydown'); await delay(120);
+        frame.contentWindow.dispatchEvent(new frame.contentWindow.Event('blur')); release();
+        assert(el('pause-toggle').textContent === 'Resume', 'Window blur did not pause');
+        click('pause-toggle'); await delay(1800); assert(cuts() === before, 'Blur retained the hold');
+    });
+    await check('Guide, world return and game toolbar actions restore operating focus', async () => {
+        await fixture(); click('start-shift');
+        click('guide-toggle'); assert(!key('keydown'), 'Guide captured gameplay Space'); release();
+        click('guide-return'); click('pause-toggle'); assert(focused(), 'Guide return Resume lost control');
+        const mass = el('material-moved').textContent;
+        click('world-toggle'); assert(!key('keydown'), 'World map captured gameplay Space'); release();
+        click('mobilize'); await wait(() => !el('start-shift').disabled, 'Saved site unavailable');
+        assert(el('material-moved').textContent === mass, 'Returning to world changed saved excavation');
+        click('pause-toggle'); assert(focused(), 'World return Resume lost control');
+        for (const id of ['expand-toggle', 'plan-toggle', 'plan-toggle', 'equipment-toggle', 'equipment-toggle', 'sound-toggle']) {
+            click(id); await delay(100); assert(focused(), id + ' retained keyboard focus');
+        }
+        const before = cuts(); key('keydown'); await delay(1700); release(); assert(cuts() > before, 'Toolbar actions prevented next hold');
+    });
+    await check('Crew drill restores operating focus when equipment becomes ready', async () => {
+        await fixture(); click('start-shift'); el('crew-panel').open = true; click('crew-operation');
+        assert(focused(), 'Crew action kept focus on drill button');
+        await wait(() => !el('operate').disabled, 'Crew drill did not finish', 16000);
+        const before = cuts(); key('keydown'); await delay(1700); release(); assert(cuts() > before, 'Post-drill hold did not operate');
+    });
+    await check('At-grade stopping explains how to continue, then backing up allows another hold', async () => {
+        await fixture(false); click('practice'); key('keydown'); await delay(14000); release();
+        await wait(() => idle() && parseFloat(el('stat-bucket').textContent) === 0, 'Bucket did not empty');
+        assert(el('action-label').textContent === 'At pipe grade', 'Completed bed still asks the player to dig');
+        assert(el('action-help').textContent.includes('back up 2 m'), 'Completed bed lacks next action');
+        const before = cuts(); click('advance-cut'); await delay(1500); key('keydown'); await delay(1700); release();
+        assert(cuts() > before, 'Backing up failed to re-enable held digging');
+    });
+    log(failures ? failures + ' CHECK(S) FAILED' : 'ALL 6 INPUT CHECKS PASSED'); this.disabled = false;
+};
+</script></html>
