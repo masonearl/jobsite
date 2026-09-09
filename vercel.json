@@ -6,6 +6,14 @@
     {
       "source": "/jobsite",
       "destination": "/index.html"
+    },
+    {
+      "source": "/jobsite-projects",
+      "destination": "/jobsite-projects.html"
+    },
+    {
+      "source": "/jobsite-utility",
+      "destination": "/jobsite-utility.html"
     }
   ]
 }

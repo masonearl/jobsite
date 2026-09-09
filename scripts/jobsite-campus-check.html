@@ -15,7 +15,30 @@ async function run(){
  try{
   await until(()=>doc()?.body?.dataset.campusReady==='true');
   result('Seven sourced project destinations load',doc().querySelectorAll('[data-destination]').length===7&&el('destination-source').href.includes('boxeldercountyut'));
-  click('mobilize-campus');await until(()=>!el('construction').hidden);click('dispatch-all');click('order-all');click('run-project');
+  await until(()=>doc().body.dataset.worldReady==='true');
+  const canvas=el('world-canvas'),distance=()=>Number(canvas.dataset.worldDistance),longitude=()=>Number(canvas.dataset.worldLongitude);
+  await until(()=>distance()>0);
+  const bounds=canvas.getBoundingClientRect();
+  result('World fills the viewport on entry',Math.abs(bounds.height-f.contentWindow.innerHeight)<2&&Math.abs(bounds.width-f.contentWindow.innerWidth)<2);
+  const far=distance();click('world-zoom-in');await until(()=>distance()<far-.15);result('Zoom buttons change camera distance continuously',distance()>1);
+  click('world-home');await until(()=>Math.abs(distance()-3.7)<.01);
+  const beforeWheel=distance();canvas.dispatchEvent(new WheelEvent('wheel',{deltaY:-120,bubbles:true,cancelable:true}));await until(()=>distance()<beforeWheel-.1);result('Wheel input zooms the world without scrolling the page',doc().documentElement.scrollTop===0);
+  const beforeKey=longitude();canvas.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));await until(()=>Math.abs(longitude()-beforeKey)>1);result('Keyboard rotates the globe',true);
+  // Synthetic touch events do not own browser pointer capture; only the fixture bypasses capture.
+  const capture=canvas.setPointerCapture;canvas.setPointerCapture=()=>{};
+  const pointer=(type,id,x,y)=>canvas.dispatchEvent(new PointerEvent(type,{pointerId:id,pointerType:'touch',clientX:x,clientY:y,bubbles:true}));
+  const beforePinch=distance();pointer('pointerdown',71,150,300);pointer('pointerdown',72,250,300);pointer('pointermove',72,340,300);pointer('pointerup',71,150,300);pointer('pointerup',72,340,300);
+  await until(()=>distance()<beforePinch-.1);result('Two-finger pinch zooms the globe',true);
+  const beforeDrag=longitude();pointer('pointerdown',73,220,300);pointer('pointermove',73,120,300);pointer('pointercancel',73,120,300);canvas.setPointerCapture=capture;
+  await until(()=>Math.abs(longitude()-beforeDrag)>1);result('Touch drag rotates and cancellation releases input',!canvas.classList.contains('dragging'));
+  click('map-zoom');await until(()=>Math.abs(distance()-1.94)<.01);
+  result('Regional view exposes seven separate project markers',doc().querySelectorAll('[data-world-site]:not([hidden])').length===7);
+  doc().querySelector('[data-world-site="starbase"]').click();result('Globe marker selects the matching project brief',get('destination-name').includes('Starbase'));
+  doc().querySelector('[data-destination="stratos"]').click();
+  click('mobilize-campus');await until(()=>!el('construction').hidden);await until(()=>Number(el('campus-canvas').dataset.drawCalls)>0);
+  result('Construction view also fills the viewport',Math.abs(el('campus-canvas').getBoundingClientRect().height-f.contentWindow.innerHeight)<2);
+  click('operations-toggle');result('Operations drawer opens above the site',!el('operations').hidden&&el('operations-toggle').getAttribute('aria-expanded')==='true');click('operations-close');result('Operations drawer closes and restores focus',el('operations').hidden&&doc().activeElement===el('operations-toggle'));
+  click('dispatch-all');click('order-all');click('run-project');
   await until(()=>get('metric-day')!=='0');result('Autonomous work advances without Space',true);
   click('guide-open');const day=get('metric-day'),cost=get('metric-cost');await sleep(500);result('Field guide pauses work and costs',get('metric-day')===day&&get('metric-cost')===cost&&get('run-project')==='Run project');click('guide-close');
   click('tab-resources');const add=doc().querySelector('[aria-label="Add one Steel + enclosure crew"]');add.click();await sleep(300);result('Resource dispatch changes workforce',el('labor-roster').textContent.includes('2 crews'));
@@ -32,9 +55,18 @@ async function run(){
   click('map-return');doc().querySelector('[data-destination="starbase"]').click();click('mobilize-campus');await sleep(350);
   result('Different destinations have isolated saves and scopes',get('metric-progress')==='0%'&&get('work-packages').includes('Launch pad + tower'));
   if(mobile)result('390 px viewport has no horizontal page overflow',doc().documentElement.scrollWidth<=390);
+  if(mobile){
+   const visibleButtons=[...doc().querySelectorAll('.topbar button')].filter(b=>!b.hidden);
+   result('Phone navigation stays inside the viewport',visibleButtons.every(b=>b.getBoundingClientRect().right<=390&&b.getBoundingClientRect().left>=0));
+   f.style.width='844px';f.style.height='390px';await sleep(300);
+   result('Landscape phone scene resizes without page overflow',doc().documentElement.scrollWidth<=844&&Math.abs(el('campus-canvas').getBoundingClientRect().height-390)<2);
+  }
+  f.src='/__campus-fixture?world-unavailable=true';await until(()=>doc()?.body?.dataset.campusReady==='true'&&!el('world-error').hidden);
+  result('WebGL globe failure keeps the project list available',!el('destinations').hidden&&doc().querySelectorAll('[data-destination]').length===7);
+  click('mobilize-campus');await until(()=>Number(el('campus-canvas').dataset.drawCalls)>0);result('A project remains playable if only the globe fails',el('scene-error').hidden&&!el('construction').hidden);
   document.querySelector('#status').textContent='PASS: all campus browser checks';
  }catch(error){document.querySelector('#status').textContent='FAIL: '+error.message;}finally{document.querySelector('#run').disabled=false;}
 }
 document.querySelector('#run').onclick=run;
-if(preview){f.src='/__campus-fixture?seed='+(query.get('seed')||'mid')+'&site='+(query.get('site')||'stratos');document.querySelector('#status').textContent='Preview';f.onload=async()=>{await until(()=>doc()?.body?.dataset.campusReady==='true');click('mobilize-campus');};}else run();
+if(preview){f.src='/__campus-fixture?seed='+(query.get('seed')||'mid')+'&site='+(query.get('site')||'stratos');document.querySelector('#status').textContent='Preview';f.onload=async()=>{await until(()=>doc()?.body?.dataset.campusReady==='true');if(!query.has('world'))click('mobilize-campus');};}else run();
 </script>

@@ -12,6 +12,10 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(ROOT / 'web'), **kwargs)
 
     def translate_path(self, path):
+        if path.split('?', 1)[0] in ['/jobsite', '/jobsite-projects']:
+            return str(ROOT / 'web' / 'jobsite-projects.html')
+        if path.split('?', 1)[0] == '/jobsite-utility':
+            return str(ROOT / 'web' / ('jobsite.html' if (ROOT / 'web' / 'jobsite.html').exists() else 'jobsite-utility.html'))
         if path.split('?', 1)[0] == '/__input-check':
             return str(ROOT / 'scripts' / 'jobsite-input-check.html')
         if path.split('?', 1)[0] == '/__project-check':
@@ -27,6 +31,8 @@ class Handler(SimpleHTTPRequestHandler):
             html = (ROOT / 'web' / 'jobsite-projects.html').read_text()
             bootstrap = "const values=window.parent.campusTestStorage||new Map();Object.defineProperty(window,'localStorage',{value:{getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,String(value)),removeItem:key=>values.delete(key)}});"
             html = html.replace('<head>', '<head><script>' + bootstrap + '</script>')
+            if query.get('world-unavailable') == ['true']:
+                html = html.replace('<head>', "<head><script>const originalContext=HTMLCanvasElement.prototype.getContext;HTMLCanvasElement.prototype.getContext=function(...args){return this.id==='world-canvas'?null:originalContext.apply(this,args);};</script>")
             setup = ''
             if query.get('seed'):
                 site = query.get('site', ['stratos'])[0]
@@ -47,6 +53,8 @@ class Handler(SimpleHTTPRequestHandler):
         if url.path != '/__input-fixture':
             return super().do_GET()
         page = ROOT / 'web' / 'jobsite.html'
+        if not page.exists():
+            page = ROOT / 'web' / 'jobsite-utility.html'
         if not page.exists():
             page = ROOT / 'web' / 'index.html'
         html = page.read_text()

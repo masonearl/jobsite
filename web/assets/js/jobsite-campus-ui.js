@@ -2,7 +2,7 @@ const C = window.JobsiteCampus;
 const $ = id => document.getElementById(id);
 const money = value => '$' + (value >= 1000000 ? (value / 1000000).toFixed(2) + 'm' : Math.round(value).toLocaleString('en-US'));
 const text = (id, value) => { $(id).textContent = value; };
-let selected = C.site(new URLSearchParams(location.search).get('site')), state = null, scene = null, onMap = true, zoom = false, dirty = false, last = 0, hudTime = 0, saveTime = 0, renderTime = 0;
+let selected = C.site(new URLSearchParams(location.search).get('site')), state = null, scene = null, onMap = true, world = null, dirty = false, last = 0, hudTime = 0, saveTime = 0, renderTime = 0;
 let nextAction = () => {}, storageBlocked = false;
 const prefix = 'openmud-jobsite-campus-v1:', knownSaves = new Map();
 function notice(message) { text('notice', message); $('notice').hidden = !message; }
@@ -28,6 +28,7 @@ function save() {
 function pause() { if (state) { state.running = false; dirty = true; save(); if (!onMap) hud(); } }
 function makeButton(label, click, className = '') { const b = document.createElement('button'); b.textContent = label; b.className = className; b.addEventListener('click', click); return b; }
 function setTab(name) {
+    if (!onMap) openOperations(true, false);
     document.querySelectorAll('[data-tab]').forEach(b => { const active = b.dataset.tab === name; b.setAttribute('aria-selected', active); b.tabIndex = active ? 0 : -1; $('panel-' + b.dataset.tab).hidden = !active; });
 }
 document.querySelectorAll('[data-tab]').forEach((b, i, tabs) => {
@@ -49,37 +50,41 @@ function choose(id) {
     const saved = readSave(id);
     text('mobilize-campus', saved.state ? saved.state.complete ? 'Visit completed project' : 'Resume project' : 'Mobilize project');
     text('save-label', saved.state ? Math.round(C.progress(saved.state) * 100) + '% built / day ' + Math.floor(saved.state.day) + ' saved on this device' : 'Start with a released scenario design and bare ground.');
-    drawPins();
+    world?.setSelected(selected.id);
 }
 for (const [i, p] of C.SITES.entries()) {
-    const b = makeButton('', () => choose(p.id), 'destination'); b.dataset.destination = p.id;
+    const b = makeButton('', () => { choose(p.id); world?.focusSite(p); if (matchMedia('(max-width: 760px)').matches) toggleProjects(false); }, 'destination'); b.dataset.destination = p.id;
     b.innerHTML = '<span>' + String(i + 1).padStart(2, '0') + '</span><div><strong>' + p.name + '</strong><small>' + p.place + '</small></div>'; $('destinations').append(b);
 }
-function drawPins() {
-    $('atlas-pins').replaceChildren();
-    $('atlas').querySelector('svg').setAttribute('viewBox', zoom ? '138 105 172 86' : '0 0 1000 500');
-    text('map-zoom', zoom ? 'World view' : 'Explore United States');
-    if (!zoom) {
-        const b = makeButton('7 US projects', () => { zoom = true; drawPins(); }, 'atlas-pin atlas-cluster'); b.style.left = '23%'; b.style.top = '31%'; $('atlas-pins').append(b); return;
-    }
-    for (const [i, p] of C.SITES.entries()) {
-        const b = makeButton(String(i + 1).padStart(2, '0'), () => choose(p.id), 'atlas-pin');
-        const x = (p.lon + 180) / 360 * 1000, y = (90 - p.lat) / 180 * 500;
-        b.style.left = ((x - 138) / 172 * 100 + (p.id === 'saline' ? 1.8 : p.id === 'indiana' ? -1 : 0)) + '%';
-        b.style.top = ((y - 105) / 86 * 100 + (p.id === 'saline' ? -3 : p.id === 'indiana' ? 3 : 0)) + '%';
-        b.setAttribute('aria-label', p.name + ', ' + p.place); b.setAttribute('aria-pressed', selected.id === p.id); b.title = p.name; $('atlas-pins').append(b);
-    }
+function toggleProjects(open) {
+    $('destinations').hidden = !open; $('projects-toggle').setAttribute('aria-expanded', open);
 }
-$('map-zoom').addEventListener('click', () => { zoom = !zoom; drawPins(); });
-fetch('/assets/jobsite/world-land.geojson').then(r => { if (!r.ok) throw Error(); return r.json(); }).then(data => {
-    for (const feature of data.features || []) {
-        const polygons = feature.geometry.type === 'Polygon' ? [feature.geometry.coordinates] : feature.geometry.coordinates;
-        for (const poly of polygons) {
-            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            path.setAttribute('d', poly.map(ring => ring.map(([lon, lat], i) => (i ? 'L' : 'M') + ((lon + 180) / 360 * 1000).toFixed(2) + ',' + ((90 - lat) / 180 * 500).toFixed(2)).join(' ') + 'Z').join(' ')); $('atlas-land').append(path);
-        }
-    }
-}).catch(() => text('map-caption', 'Map unavailable. All projects remain selectable below.'));
+$('projects-toggle').addEventListener('click', () => toggleProjects($('destinations').hidden));
+toggleProjects(!matchMedia('(max-width: 760px)').matches);
+function worldFailure() {
+    $('world-loading').hidden = true; $('world-error').hidden = false; $('atlas-pins').hidden = true;
+    ['world-home','map-zoom','world-zoom-in','world-zoom-out'].forEach(id => $(id).disabled = true);
+    toggleProjects(true); world = null;
+}
+async function loadWorld() {
+    try {
+        const { WorldScene } = await import('./jobsite-world-scene.js');
+        world = new WorldScene($('world-canvas'), $('atlas-pins'), C.SITES, choose, worldFailure);
+        world.setSelected(selected.id); await world.ready;
+        $('world-loading').hidden = true; document.body.dataset.worldReady = 'true';
+        if ($('world-canvas').dataset.surface !== 'blue-marble') document.querySelector('.map-credit').textContent = 'Natural Earth / regional markers';
+    } catch (_) { worldFailure(); }
+}
+$('world-home').addEventListener('click', () => world?.home());
+$('map-zoom').addEventListener('click', () => world?.focusUS());
+$('world-zoom-in').addEventListener('click', () => world?.zoom(-.2));
+$('world-zoom-out').addEventListener('click', () => world?.zoom(.2));
+function openOperations(open, focus = true) {
+    $('operations').hidden = !open; $('operations-toggle').setAttribute('aria-expanded', open);
+    if (focus) $(open ? 'operations-close' : 'operations-toggle').focus();
+}
+$('operations-toggle').addEventListener('click', () => openOperations($('operations').hidden));
+$('operations-close').addEventListener('click', () => openOperations(false));
 
 const taskRows = new Map(), resourceRows = new Map(), deliveryRows = new Map();
 function buildBoard() {
@@ -125,16 +130,16 @@ function buildBoard() {
 async function mobilize() {
     const saved = readSave(selected.id); state = saved.state || C.create(selected.id); storageBlocked = !!saved.raw && !saved.state;
     notice(storageBlocked ? 'The existing save uses an unreadable format. It is preserved; this attempt will not overwrite it. Use Start a new attempt in Project record to explicitly replace it.' : saved.unavailable ? 'Device storage is unavailable. Download a project record before leaving.' : '');
-    onMap = false; $('explorer').hidden = true; $('construction').hidden = false; $('map-return').hidden = false;
+    onMap = false; document.body.classList.remove('world-view'); $('operations-toggle').hidden = false; $('explorer').hidden = true; $('construction').hidden = false; $('map-return').hidden = false;
     text('project-name', selected.name); text('project-location', selected.place + ' / ' + (selected.type === 'space' ? 'Civil expansion' : 'Representative construction phase'));
-    buildBoard(); hud(); window.scrollTo({ top: 0 }); $('run-project').focus();
+    buildBoard(); openOperations(false, false); hud(); window.scrollTo({ top: 0 }); $('run-project').focus();
     try {
         if (!scene) { const { CampusScene } = await import('./jobsite-campus-scene.js'); scene = new CampusScene($('campus-canvas'), () => { pause(); $('scene-error').hidden = false; }); }
         scene.configure(state); document.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === 'site')); $('scene-error').hidden = true;
     } catch (_) { $('scene-error').hidden = false; }
     dirty = true; save();
 }
-function showMap() { pause(); onMap = true; $('explorer').hidden = false; $('construction').hidden = true; $('map-return').hidden = true; choose(selected.id); window.scrollTo({ top: 0 }); $('mobilize-campus').focus(); }
+function showMap() { pause(); onMap = true; document.body.classList.add('world-view'); $('operations-toggle').hidden = true; openOperations(false, false); $('explorer').hidden = false; $('construction').hidden = true; $('map-return').hidden = true; choose(selected.id); world?.resize(); window.scrollTo({ top: 0 }); $('mobilize-campus').focus(); }
 $('mobilize-campus').addEventListener('click', mobilize); $('map-return').addEventListener('click', showMap); $('choose-next').addEventListener('click', showMap);
 function toggleRun() { if (!state || state.complete || onMap || $('field-guide').open) return; state.running = !state.running; dirty = true; hud(); }
 $('run-project').addEventListener('click', toggleRun);
@@ -152,7 +157,7 @@ function desk(allocation) {
     else if (Object.values(state.orders).some(o => !o.ordered)) { title = 'Buy ahead of the build.'; copy = 'Steel, switchgear, cooling and fit-out packages have delivery lead times. Order early while the sitework advances.'; button = 'Order all packages / ' + money(Object.entries(C.MATERIALS).reduce((n, [k, m]) => n + (state.orders[k].ordered ? 0 : m.quantity * m.cost), 0)); action = () => Object.keys(C.MATERIALS).forEach(k => C.order(state, k)); }
     else if (!state.running) { title = 'Project paused.'; copy = 'Assignments and deliveries are saved. Resume the clock when you are ready to continue.'; button = 'Run project'; action = () => { state.running = true; }; }
     else if (!allocation.active.length) { title = 'The next handoff is waiting.'; copy = Object.values(allocation.reasons).find(r => !['Complete', 'Not dispatched'].includes(r)) || 'Dispatch unfinished work to continue.'; button = 'Review work packages'; action = () => { setTab('work'); $('tab-work').scrollIntoView({ behavior: 'smooth', block: 'start' }); }; }
-    else { title = allocation.active.length + ' work fronts moving.'; copy = allocation.active.map(t => t.name).join('. ') + '. Watch the waiting reasons below before adding resources.'; button = 'Manage labor + equipment'; action = () => { setTab('resources'); $('tab-resources').scrollIntoView({ behavior: 'smooth', block: 'start' }); }; }
+    else { title = allocation.active.length + ' work fronts moving.'; copy = allocation.active.map(t => t.name).join('. ') + '. Open Operations to review waiting reasons before adding resources.'; button = 'Manage labor + equipment'; action = () => { setTab('resources'); $('tab-resources').scrollIntoView({ behavior: 'smooth', block: 'start' }); }; }
     text('next-title', title); text('next-copy', copy); text('next-action', button); nextAction = action;
 }
 function hud() {
@@ -195,17 +200,16 @@ function hud() {
 document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => { scene?.setCamera(b.dataset.view); document.querySelectorAll('[data-view]').forEach(x => x.setAttribute('aria-pressed', x === b)); }));
 $('cutaway').addEventListener('click', () => { if (!scene) return; scene.cutaway = !scene.cutaway; $('cutaway').setAttribute('aria-pressed', scene.cutaway); text('cutaway', scene.cutaway ? 'Roof on' : 'Roof off'); });
 $('guide-open').addEventListener('click', () => { pause(); $('field-guide').showModal(); }); $('guide-close').addEventListener('click', () => $('field-guide').close());
-$('expand').addEventListener('click', () => { const expanded = document.body.classList.toggle('expanded'); text('expand', expanded ? 'Restore' : 'Expand'); });
 $('fullscreen').addEventListener('click', async () => {
     try {
         if (document.fullscreenElement || document.webkitFullscreenElement) await (document.exitFullscreen?.() || document.webkitExitFullscreen?.());
         else { const app = $('campus-app'), enter = app.requestFullscreen || app.webkitRequestFullscreen; if (!enter) throw Error(); await enter.call(app); }
-    } catch (_) { document.body.classList.add('expanded'); text('expand', 'Restore'); notice('Fullscreen is unavailable in this browser. The expanded game view is open.'); }
+    } catch (_) { notice('Fullscreen is unavailable in this browser. The game already fills the window.'); }
 });
 for (const event of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(event, () => text('fullscreen', document.fullscreenElement || document.webkitFullscreenElement ? 'Exit fullscreen' : 'Fullscreen'));
 document.addEventListener('keydown', e => {
     if (e.key.toLowerCase() === 'p' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && !['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) { e.preventDefault(); toggleRun(); }
-    if (e.key === 'Escape' && !$('field-guide').open) { document.body.classList.remove('expanded'); text('expand', 'Expand'); }
+    if (e.key === 'Escape' && !$('field-guide').open && !$('operations').hidden) openOperations(false);
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); }); window.addEventListener('pagehide', pause);
 $('reset-campus').addEventListener('click', () => {
@@ -217,12 +221,15 @@ $('export-record').addEventListener('click', () => {
 });
 function loop(now) {
     const dt = Math.min(.1, (now - (last || now)) / 1000); last = now;
+    if (onMap && !document.hidden && !$('field-guide').open && now - renderTime > 33) { world?.render(Math.min(.1, (now - renderTime) / 1000)); renderTime = now; }
     if (!onMap && state) {
         if (state.running && !$('field-guide').open) { C.advance(state, dt / 3 * state.speed); dirty = true; }
         if (now - hudTime > 250) { hud(); hudTime = now; }
-        if (now - renderTime > 33) { scene?.render(state, Math.min(.1, (now - renderTime) / 1000)); renderTime = now; }
+        if (!document.hidden && !$('field-guide').open && now - renderTime > 33) { scene?.render(state, Math.min(.1, (now - renderTime) / 1000)); renderTime = now; }
         if (now - saveTime > 2000) { save(); saveTime = now; }
     }
     requestAnimationFrame(loop);
 }
-choose(selected.id); document.body.dataset.campusReady = 'true'; requestAnimationFrame(loop);
+choose(selected.id); document.body.dataset.campusReady = 'true'; loadWorld();
+if (location.hash === '#how-to-play') $('field-guide').showModal();
+requestAnimationFrame(loop);
