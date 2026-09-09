@@ -1,6 +1,6 @@
 # Jobsite
 
-A browser construction game from [openmud](https://openmud.ai). Choose a region, operate an excavator, take a utility line from excavation to inspected pipe, compacted backfill, and handover. Or explore the site freely with an excavator, trucks, and a pipe crew.
+A browser construction game from [openmud](https://openmud.ai). Build a campus from sitework through commissioning, or dispatch an autonomous utility spread. Choose a region, operate an excavator, take a utility line from excavation to inspected pipe, compacted backfill, and handover. Or explore the site freely with an excavator, trucks, and a pipe crew.
 
 **[Play Jobsite](https://openmud.ai/jobsite)** · **[How to play](https://openmud.ai/jobsite#how-to-play)** · **[Report an issue](https://github.com/masonearl/jobsite/issues)**
 
@@ -21,6 +21,22 @@ python3 -m http.server 8000 --directory web
 Open **http://localhost:8000**. Use an HTTP server rather than opening the HTML file directly: the game loads JavaScript modules and map data. A browser with WebGL is required.
 
 There is no build step, account, API key, backend service, or package install needed to play. Three.js is included locally. This standalone edition does not include the parent site's analytics or navigation scripts.
+
+## Build a construction campaign
+
+Open **Build the whole project** on the main screen, or [play construction campaigns](https://openmud.ai/jobsite-projects). Choose from Stratos in Utah, Stargate in Abilene, Saline and Doña Ana County, AWS New Carlisle, Terafab in Grimes County, or a Starbase civil expansion.
+
+Each scenario has 24 dependency-linked work packages across two structures and their support infrastructure. Dispatch all crews once, order long-lead packages, and run the project. Survey, earthwork, utilities, concrete, steel, electrical, mechanical, fit-out and commissioning teams operate autonomously. Cranes, access equipment, concrete pumps and other spreads are shared. Waiting reasons expose the bottleneck. Prioritize work, add capacity, expedite deliveries, or demobilize finished trades to reduce payroll. Formation, pre-energization and handover require explicit inspection release.
+
+The 3D campus gains foundations, structural bays, enclosure, plant equipment and fit-out as work advances. Use **Roof off** to inspect internal services and racks. Terafab replaces data-hall fit-out with process utilities, cleanrooms and tool installation. Starbase has a pad, tower and integration building; it does not simulate rocket operations. Regional ground and repeating weather presets change outdoor productivity and crane availability.
+
+Challenge targets and a completion score reward schedule and cost performance. The guide explains the sequence. Map, guide, tab hiding and reload pause the project. P pauses; repeated Space input is not needed. Each destination has a separate device save under `openmud-jobsite-campus-v1:`. These saves do not migrate or overwrite utility-line saves. Unsupported or unreadable campus saves are preserved, and another tab's write pauses conflicting saves. Export a JSON project record for comparison. A new attempt explicitly replaces only the selected campus save.
+
+**Public facts vs game assumptions:** every project card links its primary source and gives the source date. These are representative construction phases, not surveyed replicas, complete project budgets, current progress feeds, or endorsed depictions. Abilene and Starbase already exist; their scenarios are fictional additional phases. Stratos is presented as a proposal. Layouts, 12 ha sitework quantities, labor counts, equipment groups, material allowances, durations and weather are game presets. Purchase packages are paid at order; labor and rentals accrue daily even when idle, plus $12,000/day site overhead. Model time is three seconds per scenario day at 1x. Real permits, curing, qualification and staffing are substantially simplified. Visible equipment and workers are representative, not one-to-one counts.
+
+Campus source files are `web/jobsite-projects.html`, `jobsite-campus.js` (pure scheduler, catalogs, sources and save validation), `jobsite-campus-scene.js` (Three.js), `jobsite-campus-ui.js` (controls and persistence), and `jobsite-campus.css` under the corresponding assets folders. Rendering is capped at 30 fps and 1.25 device pixels per CSS pixel. No new runtime dependencies were added.
+
+Run `npm test` for 108 simulation/save checks. With the QA server running, open `/__campus-check` for ten browser checks including a full build, inspection holds, pause, resource additions, map/save return and destination isolation. Add `?mobile` for an additional 390 px overflow check. `/__campus-check?preview&site=starbase&seed=complete` previews completed civil works; use `site=terafab` for the fab. Fixtures use memory storage and an accelerated local-only clock.
 
 ## Dispatch an autonomous utility spread
 

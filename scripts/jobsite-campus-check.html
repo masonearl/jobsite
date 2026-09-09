@@ -1,0 +1,40 @@
+<!DOCTYPE html><meta charset="utf-8"><title>Campus browser checks</title>
+<style>body{background:#111c22;color:#dae8e0;font:14px system-ui;margin:20px}iframe{border:1px solid #667b7c;width:1200px;height:1000px;max-width:100%}li{margin:8px 0}.pass{color:#a6d8ad}.fail{color:#efb193}</style>
+<h1>Campus browser checks</h1><p id="status">Starting</p><button id="run">Run checks</button><ol id="results"></ol><iframe title="Campus test game"></iframe>
+<script>
+window.campusTestStorage = new Map();
+const f=document.querySelector('iframe'),query=new URLSearchParams(location.search),mobile=query.has('mobile'),preview=query.has('preview');
+if(mobile){f.style.width='390px';f.style.height='844px';}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function until(fn,limit=20000){const end=Date.now()+limit;while(Date.now()<end){if(fn())return;await sleep(80);}throw Error('Timed out: '+String(fn));}
+const doc=()=>f.contentDocument,el=id=>doc().getElementById(id),click=id=>{const b=el(id);if(!b||b.disabled)throw Error('Unavailable button '+id);b.click();},get=id=>el(id).textContent;
+function result(name,pass){const li=document.createElement('li');li.className=pass?'pass':'fail';li.textContent=(pass?'PASS: ':'FAIL: ')+name;document.querySelector('#results').append(li);if(!pass)throw Error(name);}
+async function run(){
+ document.querySelector('#run').disabled=true;document.querySelector('#results').replaceChildren();window.campusTestStorage.clear();
+ f.src='/__campus-fixture?fast=true';
+ try{
+  await until(()=>doc()?.body?.dataset.campusReady==='true');
+  result('Seven sourced project destinations load',doc().querySelectorAll('[data-destination]').length===7&&el('destination-source').href.includes('boxeldercountyut'));
+  click('mobilize-campus');await until(()=>!el('construction').hidden);click('dispatch-all');click('order-all');click('run-project');
+  await until(()=>get('metric-day')!=='0');result('Autonomous work advances without Space',true);
+  click('guide-open');const day=get('metric-day'),cost=get('metric-cost');await sleep(500);result('Field guide pauses work and costs',get('metric-day')===day&&get('metric-cost')===cost&&get('run-project')==='Run project');click('guide-close');
+  click('tab-resources');const add=doc().querySelector('[aria-label="Add one Steel + enclosure crew"]');add.click();await sleep(300);result('Resource dispatch changes workforce',el('labor-roster').textContent.includes('2 crews'));
+  click('tab-work');click('run-project');await until(()=>get('next-title')==='Inspection hold.');
+  result('Foundation work waits for inspection',doc().querySelector('[data-task="a-slab"] .work-amount span').textContent==='0%');click('next-action');
+  await until(()=>Number(get('metric-progress').replace('%',''))>35);click('map-return');click('mobilize-campus');await sleep(400);
+  result('Switching to map preserves progress and resumes paused',get('run-project')==='Run project'&&Number(get('metric-progress').replace('%',''))>35);
+  click('run-project');const deadline=Date.now()+55000;
+  while(el('completion').hidden&&Date.now()<deadline){if(get('next-title')==='Inspection hold.')click('next-action');await sleep(150);}
+  result('Entire project reaches accepted handover',!el('completion').hidden&&get('metric-progress')==='100%');
+  result('All 24 work packages accepted',doc().querySelectorAll('[data-status="Complete"]').length===24);
+  await until(()=>Number(el('campus-canvas').dataset.drawCalls)>0);
+  result('3D scene remains available',el('scene-error').hidden&&el('campus-canvas').width>0);
+  click('map-return');doc().querySelector('[data-destination="starbase"]').click();click('mobilize-campus');await sleep(350);
+  result('Different destinations have isolated saves and scopes',get('metric-progress')==='0%'&&get('work-packages').includes('Launch pad + tower'));
+  if(mobile)result('390 px viewport has no horizontal page overflow',doc().documentElement.scrollWidth<=390);
+  document.querySelector('#status').textContent='PASS: all campus browser checks';
+ }catch(error){document.querySelector('#status').textContent='FAIL: '+error.message;}finally{document.querySelector('#run').disabled=false;}
+}
+document.querySelector('#run').onclick=run;
+if(preview){f.src='/__campus-fixture?seed='+(query.get('seed')||'mid')+'&site='+(query.get('site')||'stratos');document.querySelector('#status').textContent='Preview';f.onload=async()=>{await until(()=>doc()?.body?.dataset.campusReady==='true');click('mobilize-campus');};}else run();
+</script>

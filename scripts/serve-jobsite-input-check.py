@@ -16,10 +16,34 @@ class Handler(SimpleHTTPRequestHandler):
             return str(ROOT / 'scripts' / 'jobsite-input-check.html')
         if path.split('?', 1)[0] == '/__project-check':
             return str(ROOT / 'scripts' / 'jobsite-project-check.html')
+        if path.split('?', 1)[0] == '/__campus-check':
+            return str(ROOT / 'scripts' / 'jobsite-campus-check.html')
         return super().translate_path(path)
 
     def do_GET(self):
         url = urlsplit(self.path)
+        if url.path == '/__campus-fixture':
+            query = parse_qs(url.query)
+            html = (ROOT / 'web' / 'jobsite-projects.html').read_text()
+            bootstrap = "const values=window.parent.campusTestStorage||new Map();Object.defineProperty(window,'localStorage',{value:{getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,String(value)),removeItem:key=>values.delete(key)}});"
+            html = html.replace('<head>', '<head><script>' + bootstrap + '</script>')
+            setup = ''
+            if query.get('seed'):
+                site = query.get('site', ['stratos'])[0]
+                if site not in ['stratos', 'starbase', 'terafab']:
+                    site = 'stratos'
+                day = 180 if query['seed'] == ['complete'] else 40
+                setup = f"const C=JobsiteCampus,s=C.create('{site}');C.dispatch(s,'all',true);Object.keys(C.MATERIALS).forEach(k=>C.order(s,k));s.running=true;for(let i=0;i<{day * 10}&&!s.complete;i++){{C.advance(s,.1);for(const t of C.plan(s.site))if(t.gate)C.inspect(s,t.id);}}s.running=false;localStorage.setItem('openmud-jobsite-campus-v1:'+s.site,JSON.stringify(s));"
+            if query.get('fast') == ['true']:
+                setup += 'const original=JobsiteCampus.advance;JobsiteCampus.advance=(s,days)=>original(s,days*8);'
+            html = html.replace('<script type="module" src="/assets/js/jobsite-campus-ui.js">', '<script>' + setup + '</script><script type="module" src="/assets/js/jobsite-campus-ui.js">')
+            body = html.encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if url.path != '/__input-fixture':
             return super().do_GET()
         page = ROOT / 'web' / 'jobsite.html'
