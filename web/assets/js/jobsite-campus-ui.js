@@ -29,6 +29,7 @@ function pause() { if (state) { state.running = false; dirty = true; save(); if 
 function makeButton(label, click, className = '') { const b = document.createElement('button'); b.textContent = label; b.className = className; b.addEventListener('click', click); return b; }
 function setTab(name) {
     if (!onMap) openOperations(true, false);
+    $('operations').scrollTop = 0;
     document.querySelectorAll('[data-tab]').forEach(b => { const active = b.dataset.tab === name; b.setAttribute('aria-selected', active); b.tabIndex = active ? 0 : -1; $('panel-' + b.dataset.tab).hidden = !active; });
 }
 document.querySelectorAll('[data-tab]').forEach((b, i, tabs) => {
@@ -108,8 +109,8 @@ function buildBoard() {
     for (const [group, catalog, target] of [['crews', C.TRADES, 'labor-roster'], ['equipment', C.EQUIPMENT, 'equipment-roster']]) {
         $(target).replaceChildren();
         for (const [key, item] of Object.entries(catalog)) {
-            const card = document.createElement('article'); card.className = 'resource-card';
-            card.innerHTML = '<h4>' + item.name + '</h4><p>' + item.detail + '</p><p class="resource-stats"></p><div class="resource-buttons"></div>';
+            const card = document.createElement('article'); card.className = 'resource-card resource-row';
+            card.innerHTML = '<div class="resource-info"><details class="resource-detail"><summary><strong>' + item.name + '</strong><span>Details</span></summary><p>' + item.detail + '</p></details><p class="resource-stats"></p></div><div class="resource-buttons"></div>';
             const minus = makeButton('Remove', () => { C.capacity(state, group, key, -1); dirty = true; hud(); }); minus.setAttribute('aria-label', 'Remove one ' + item.name);
             const plus = makeButton('Add', () => { C.capacity(state, group, key, 1); dirty = true; hud(); }); plus.setAttribute('aria-label', 'Add one ' + item.name);
             const amount = document.createElement('span'); card.querySelector('.resource-buttons').append(minus, amount, plus); $(target).append(card);
@@ -179,7 +180,7 @@ function hud() {
     }
     for (const r of resourceRows.values()) {
         const count = state[r.group][r.key], active = count - (r.group === 'crews' ? a.labor[r.key] : a.equipment[r.key]); r.amount.textContent = count + (r.group === 'crews' ? ' crew' + (count > 1 ? 's' : '') : ' spread' + (count > 1 ? 's' : ''));
-        r.card.querySelector('.resource-stats').textContent = active + '/' + count + ' assigned / ' + money(count * r.item.rate) + ' per day' + (r.item.people ? ' / ' + count * r.item.people + ' people' : '');
+        r.card.querySelector('.resource-stats').textContent = active + '/' + count + ' assigned / ' + money(count * r.item.rate) + '/day' + (r.item.people ? ' / ' + count * r.item.people + ' people' : '');
         r.minus.disabled = count <= 0 || state.complete; r.plus.disabled = count >= 3 || state.complete;
     }
     for (const [key, r] of deliveryRows) {
