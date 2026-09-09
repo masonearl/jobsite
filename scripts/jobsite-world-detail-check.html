@@ -1,0 +1,36 @@
+<!doctype html><meta charset="utf-8"><title>Globe detail checks</title>
+<style>body{margin:20px;background:#15120f;color:#efe8dd;font:14px system-ui}#stage{position:relative;width:1200px;max-width:100%;height:720px}canvas{width:100%;height:100%}#pins{position:absolute;inset:0;pointer-events:none}#pins button{position:absolute;pointer-events:auto}li{margin:7px 0}</style>
+<script type="importmap">{"imports":{"three":"/assets/vendor/three/three.module.min.js"}}</script><script src="/assets/js/jobsite-campus.js"></script>
+<h1>Globe detail checks</h1><p id="status">Starting</p><div id="stage"><canvas id="world" tabindex="0"></canvas><div id="pins"></div></div><ol id="results"></ol>
+<script type="module">
+import {WorldScene} from '/assets/js/jobsite-world-scene.js';
+import {WorldImagery} from '/assets/js/jobsite-world-imagery.js';
+import {tileAt,tileKey,detailLevel,CACHE_LIMIT} from '/assets/js/jobsite-world-tiles.mjs';
+const canvas=document.querySelector('#world'),status=document.querySelector('#status'),site=JobsiteCampus.site('stratos');
+if(new URLSearchParams(location.search).has('mobile')){document.querySelector('#stage').style.width='390px';document.querySelector('#stage').style.height='844px';}
+const world=new WorldScene(canvas,document.querySelector('#pins'),JobsiteCampus.SITES,()=>{},()=>status.textContent='FAIL: WebGL lost');
+let last=0;function frame(now){world.render(Math.min(.1,(now-(last||now))/1000));last=now;requestAnimationFrame(frame);}requestAnimationFrame(frame);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function until(fn,limit=45000){const end=Date.now()+limit;while(Date.now()<end){if(fn())return;await sleep(80);}throw Error('Timed out: '+fn);}
+function check(name,pass){const li=document.createElement('li');li.textContent=(pass?'PASS: ':'FAIL: ')+name;document.querySelector('#results').append(li);if(!pass)throw Error(name);}
+try{
+ await world.ready;check('Local overview has 4096 pixels of real imagery',world.globe.material.map.image.width===4096);
+ world.focusSite(site);await until(()=>Math.abs(world.view.distance-1.6)<.002&&canvas.dataset.detailState==='ready');
+ check('Regional zoom loads aligned 512-pixel NASA patches',world.imagery.cache.size>0&&[...world.imagery.cache.values()].every(t=>t.texture.image.width===512&&t.texture.image.height===512)&&world.markerNodes.find(n=>n.site.id==='stratos').button.hidden===false);
+ world.zoom(-100);await until(()=>Math.abs(world.view.distance-1.16)<.002&&canvas.dataset.detailState==='ready');
+ const center=[...world.imagery.wanted].filter(key=>key===tileKey(tileAt(site.lat,site.lon,Number(key.split('/')[0]))));
+ check('Close zoom replaces stretched overview pixels with finer imagery',center.some(key=>Number(key.split('/')[0])>=Math.max(5,detailLevel(1.16,world.width,world.height,world.renderer.getPixelRatio())-1)));
+ world.target={lat:-33.9,lon:151.2,distance:1.6};await until(()=>Math.abs(world.view.lon-151.2)<.01&&canvas.dataset.detailState==='ready');
+ check('Panning across hemispheres loads new detail within the memory limit',world.imagery.cache.size<=CACHE_LIMIT&&[...world.imagery.wanted].some(key=>key===tileKey(tileAt(-33.9,151.2,Number(key.split('/')[0])))));
+ world.home();await until(()=>world.view.distance>2.75&&world.imagery.pending.size===0&&canvas.dataset.detailState==='overview');
+ check('Returning to the globe hides regional patches and stops their requests',[...world.imagery.cache.values()].every(t=>!t.mesh.visible));
+ world.imagery.dispose();let attempts=0;world.imagery=new WorldImagery(world.scene,world.renderer,world.globe.material,canvas,async()=>{attempts++;throw Error('Offline fixture');});
+ world.focusSite(site);await until(()=>Math.abs(world.view.distance-1.6)<.002&&world.imagery.failed.size>=world.imagery.wanted.size&&world.imagery.pending.size===0);
+ const before=attempts;await sleep(700);
+ check('Unavailable detail keeps the local globe and backs off retries',world.globe.material.map.image.width===4096&&canvas.dataset.detailState==='fallback'&&attempts===before);
+ world.imagery.dispose();const signals=[];world.imagery=new WorldImagery(world.scene,world.renderer,world.globe.material,canvas,(_tile,signal)=>new Promise((_resolve,reject)=>{signals.push(signal);signal.addEventListener('abort',()=>reject(Error('Aborted')));}));
+ await until(()=>signals.length===4);world.home();await until(()=>world.view.distance>2.75&&world.imagery.pending.size===0);
+ check('Zooming away aborts in-flight detail requests',signals.every(s=>s.aborted)&&world.imagery.cache.size===0);
+ status.textContent='PASS: all seven globe detail checks';world.imagery.dispose();world.imagery=null;
+}catch(error){status.textContent='FAIL: '+error.message;}
+</script>

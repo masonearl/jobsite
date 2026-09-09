@@ -38,11 +38,19 @@ Final prompt:
 
 ## Earth surface
 
-`earth-blue-marble.jpg` is the unmodified 2048 × 1024 Blue Marble land, ocean and ice mosaic from NASA Goddard Space Flight Center. It is a historical composite, not live imagery or surveyed site photography.
+`earth-blue-marble-4k.jpg` is a 4096 × 2048 overview retrieved from NASA GIBS' **BlueMarble_ShadedRelief_Bathymetry** layer on September 9, 2026. Regional views stream 512 × 512 geographic tiles from the same layer. These are historical satellite composites with shaded relief, not live imagery or surveyed site photography.
+
+- Overview request: `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?service=WMS&request=GetMap&version=1.1.1&layers=BlueMarble_ShadedRelief_Bathymetry&styles=&format=image/jpeg&srs=EPSG:4326&bbox=-180,-90,180,90&width=4096&height=2048`
+- Regional tiles: `https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/BlueMarble_ShadedRelief_Bathymetry/default/500m/{level}/{row}/{col}.jpeg`
+- [NASA GIBS access documentation](https://nasa-gibs.github.io/gibs-api-docs/access-basics/) and [geographic tile resolutions](https://nasa-gibs.github.io/gibs-api-docs/access-advanced-topics/).
+
+The renderer refines patches by their projected size, up to the service's level 7. It requests at most four tiles concurrently, selects at most 40 visible patches, and caches at most 48 tile textures. Obsolete requests are aborted; unsuccessful requests back off for a minute. The local overview remains visible while detail loads or if the service is unavailable. No credentials or API key are used. Both the globe material and tile textures use sRGB color, and cropped polar tiles retain their geographic UV bounds.
+
+`earth-blue-marble.jpg` is the earlier, unmodified 2048 × 1024 mosaic. It remains available for older cached releases.
 
 - Image: https://eoimages.gsfc.nasa.gov/images/imagerecords/57000/57730/land_ocean_ice_2048.jpg
 - Background and credits: https://science.nasa.gov/resource/blue-marble/
 - NASA media usage: https://www.nasa.gov/nasa-brand-center/images-and-media/
 - Credit: NASA Goddard Space Flight Center. Image by Reto Stöckli (land surface, shallow water, clouds).
 
-NASA imagery is generally not subject to US copyright; this image remains NASA material, outside the code's MIT license. No NASA endorsement is implied. It is served locally, with Natural Earth land outlines as a fallback.
+NASA imagery is generally not subject to US copyright; these images remain NASA material, outside the code's MIT license. No NASA endorsement is implied. The overview is served locally and regional detail comes directly from NASA GIBS. Natural Earth land outlines remain a fallback if the overview cannot load.

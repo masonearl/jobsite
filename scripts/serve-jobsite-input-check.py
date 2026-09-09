@@ -23,6 +23,8 @@ class Handler(SimpleHTTPRequestHandler):
             return str(ROOT / 'scripts' / 'jobsite-project-check.html')
         if path.split('?', 1)[0] == '/__activity-check':
             return str(ROOT / 'scripts' / 'jobsite-campus-scene-check.html')
+        if path.split('?', 1)[0] == '/__world-detail-check':
+            return str(ROOT / 'scripts' / 'jobsite-world-detail-check.html')
         if path.split('?', 1)[0] == '/__campus-check':
             return str(ROOT / 'scripts' / 'jobsite-campus-check.html')
         if path.split('?', 1)[0] == '/__campus-migration-check':

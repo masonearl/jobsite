@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { surfacePoint, rotateView, zoomDistance, approachView, facesCamera, spreadMarkers } from './jobsite-world-math.mjs';
+import { WorldImagery } from './jobsite-world-imagery.js';
 
 export class WorldScene {
     constructor(canvas, pins, sites, select, failure) {
@@ -7,7 +8,7 @@ export class WorldScene {
         this.view = { lat: 24, lon: -100, distance: 3.7 }; this.target = { ...this.view };
         this.reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
         this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'low-power' });
-        this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+        this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
         this.renderer.setClearColor(0x15120f, 0);
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(42, 1, .01, 100);
@@ -33,18 +34,19 @@ export class WorldScene {
         this.cluster.innerHTML = '<span>07</span><div>United States<small>Explore projects</small></div>';
         this.cluster.setAttribute('aria-label', 'Explore seven United States projects'); this.cluster.addEventListener('click', () => this.focusUS()); pins.append(this.cluster);
         this.observer = new ResizeObserver(() => this.resize()); this.observer.observe(canvas.parentElement);
-        canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); failure(); });
+        canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); this.imagery?.dispose(); failure(); });
         canvas.addEventListener('webglcontextrestored', () => failure());
         this.bindInput(); this.resize();
         this.ready = this.buildSurface();
     }
     async buildSurface() {
         try {
-            const texture = await new THREE.TextureLoader().loadAsync('/assets/jobsite/earth-blue-marble.jpg');
+            const texture = await new THREE.TextureLoader().loadAsync('/assets/jobsite/earth-blue-marble-4k.jpg');
             texture.colorSpace = THREE.SRGBColorSpace;
             texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
             this.globe.material.map = texture; this.globe.material.needsUpdate = true;
             this.canvas.dataset.surface = 'blue-marble';
+            this.imagery = new WorldImagery(this.scene, this.renderer, this.globe.material, this.canvas);
             return;
         } catch (_) { /* Keep a local cartographic fallback if the image cannot load. */ }
 
@@ -116,6 +118,7 @@ export class WorldScene {
         this.view=approachView(this.view,this.target,this.reducedMotion?1:1-Math.exp(-dt*9));
         const cameraPoint=surfacePoint(this.view.lat,this.view.lon,this.view.distance);this.camera.position.set(...cameraPoint);this.camera.lookAt(0,0,0);this.camera.updateMatrixWorld();
         this.sun.position.copy(this.camera.position).add(new THREE.Vector3(-1,2,1));
+        this.imagery?.update(this.view, this.width, this.height, this.renderer.getPixelRatio());
         this.renderer.render(this.scene,this.camera);
         const project=point=>{const p=new THREE.Vector3(...point).project(this.camera);return{x:(p.x+1)*this.width/2,y:(1-p.y)*this.height/2,visible:facesCamera(point,cameraPoint)&&p.z<1&&Math.abs(p.x)<1.05&&Math.abs(p.y)<1.05};};
         const clustered=this.view.distance>2.75, clusterPosition=project(surfacePoint(36,-98));
