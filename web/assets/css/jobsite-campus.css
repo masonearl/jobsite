@@ -70,3 +70,5 @@ html,body{height:100%;overflow:hidden}#campus-app{position:relative;width:100%;h
     #delivery-roster .resource-buttons{grid-column:2;grid-row:1 / 4;flex-direction:column;align-items:stretch}
     #delivery-roster button{min-height:36px}
 }
+
+.process-source{display:block;font-size:11px;margin-top:6px}.process-reading{margin-top:16px;font-size:12px}.process-reading summary{cursor:pointer;color:var(--earth)}.process-reading p{margin-top:12px}

@@ -1,5 +1,6 @@
 """Serve the unchanged game with a local-only browser input regression page."""
 import argparse
+import json
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -24,6 +25,8 @@ class Handler(SimpleHTTPRequestHandler):
             return str(ROOT / 'scripts' / 'jobsite-campus-scene-check.html')
         if path.split('?', 1)[0] == '/__campus-check':
             return str(ROOT / 'scripts' / 'jobsite-campus-check.html')
+        if path.split('?', 1)[0] == '/__campus-migration-check':
+            return str(ROOT / 'scripts' / 'jobsite-campus-migration-check.html')
         return super().translate_path(path)
 
     def do_GET(self):
@@ -32,15 +35,20 @@ class Handler(SimpleHTTPRequestHandler):
             query = parse_qs(url.query)
             html = (ROOT / 'web' / 'jobsite-projects.html').read_text()
             bootstrap = "const values=window.parent.campusTestStorage||new Map();Object.defineProperty(window,'localStorage',{value:{getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,String(value)),removeItem:key=>values.delete(key)}});"
+            if query.get('storage-blocked') == ['true']:
+                bootstrap = bootstrap.replace('setItem:(key,value)=>values.set(key,String(value))', "setItem:(key,value)=>{if(key.endsWith(':before-process-update'))throw new DOMException('Storage full','QuotaExceededError');values.set(key,String(value));}")
             html = html.replace('<head>', '<head><script>' + bootstrap + '</script>')
             if query.get('world-unavailable') == ['true']:
                 html = html.replace('<head>', "<head><script>const originalContext=HTMLCanvasElement.prototype.getContext;HTMLCanvasElement.prototype.getContext=function(...args){return this.id==='world-canvas'?null:originalContext.apply(this,args);};</script>")
             setup = ''
+            if query.get('legacy') == ['true']:
+                old = json.loads((ROOT / 'tests' / 'fixtures' / 'jobsite-campus-v1.json').read_text())[3]
+                setup = "localStorage.setItem('openmud-jobsite-campus-v1:stratos'," + json.dumps(json.dumps(old)) + ");"
             if query.get('seed'):
                 site = query.get('site', ['stratos'])[0]
                 if site not in ['stratos', 'starbase', 'terafab']:
                     site = 'stratos'
-                day = {'arrival': 0, 'earth': 7, 'concrete': 15, 'steel': 21, 'mid': 40, 'complete': 180}.get(query['seed'][0], 40)
+                day = {'arrival': 0, 'earth': 7, 'concrete': 22, 'steel': 29, 'mid': 40, 'complete': 180}.get(query['seed'][0], 40)
                 setup = f"const C=JobsiteCampus,s=C.create('{site}');C.dispatch(s,'all',true);Object.keys(C.MATERIALS).forEach(k=>C.order(s,k));s.running=true;for(let i=0;i<{day * 10}&&!s.complete;i++){{C.advance(s,.1);for(const t of C.plan(s.site))if(t.gate)C.inspect(s,t.id);}}s.running=false;localStorage.setItem('openmud-jobsite-campus-v1:'+s.site,JSON.stringify(s));"
             if query.get('fast') == ['true']:
                 setup += 'const original=JobsiteCampus.advance;JobsiteCampus.advance=(s,days)=>original(s,days*32);'

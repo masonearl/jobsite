@@ -46,7 +46,7 @@
         fitout: { name: 'Specialty fit-out packages', lead: 18, cost: 1900000, quantity: 2 }
     };
     const site = id => SITES.find(s => s.id === id) || SITES[0];
-    function plan(id) {
+    function legacyPlan(id) {
         const p = site(id), space = p.type === 'space', fab = p.type === 'fab', tasks = [];
         const add = (key, name, deps, days, trade, equipment, zone, quantity, lesson, options = {}) => tasks.push({ id: key, name, deps, days, trade, equipment, zone, quantity, lesson, outdoor: true, cost: days * 18000, ...options });
         add('survey', 'Survey, approvals + mobilization', [], 2, 'survey', null, 'access', '1 released work area', 'Design release, site access and environmental controls precede field production. Real approvals are not compressed to two days.', { cost: 120000 });
@@ -72,9 +72,75 @@
         add('handover', 'Punch list, records + owner handover', ['test', 'roads'], 2, 'testing', null, 'yard', '1 accepted project phase', 'Close defects, deliver records and obtain acceptance. Completion counts the entire scope, not just the shell.', { outdoor: false, gate: true, cost: 80000 });
         return tasks;
     }
+    const PROCESS_SOURCES = {
+        sequencing: { title: 'EPA / construction sequencing', url: 'https://www.epa.gov/system/files/documents/2021-11/bmp-construction-sequencing.pdf' },
+        excavation: { title: 'OSHA / excavation requirements', url: 'https://www.osha.gov/laws-regs/regulations/standardnumber/1926/1926.651' },
+        utilities: { title: 'Salt Lake City / utility inspection practices', url: 'https://www.slcdocs.com/utilities/PDF%20Files/Std_practices_090105.pdf' },
+        compaction: { title: 'Salt Lake City / trench compaction and quality records', url: 'https://slcdocs.com/utilities/PDF%20Files/SSMP%20Program.pdf' },
+        water: { title: 'UFGS / water utility distribution piping', url: 'https://www.wbdg.org/FFC/DOD/UFGS/UFGS%2033%2011%2000.pdf' },
+        concrete: { title: 'OSHA / cast-in-place concrete', url: 'https://www.osha.gov/laws-regs/regulations/standardnumber/1926/1926.703' },
+        erection: { title: 'OSHA / steel erection release and access', url: 'https://www.osha.gov/laws-regs/regulations/standardnumber/1926/1926.752' },
+        commissioning: { title: 'Vertiv / commissioning process', url: 'https://www.vertiv.com/en-us/services-catalog/services/project-services/engineering/' },
+        overlap: { title: 'Microsoft / an active datacenter construction sequence', url: 'https://local.microsoft.com/blog/boyd-farms-datacenter-construction-update/' }
+    };
+    const planCache = new Map();
+    function plan(id) {
+        id=site(id).id;if(planCache.has(id))return planCache.get(id).slice();
+        const tasks = legacyPlan(id), byId = Object.fromEntries(tasks.map(t => [t.id, t]));
+        const change = (key, fields) => Object.assign(byId[key], fields);
+        const add = (key, name, deps, days, trade, equipment, zone, lesson, options = {}) => {
+            const t = { id:key, name, deps, days, trade, equipment, zone, lesson, quantity:'1 released work area', outdoor:true, cost:days*18000, ...options }; tasks.push(t); byId[key]=t;
+        };
+        change('survey', { name:'Design release, setout + utility locates', lesson:'The scenario starts with an approved design. Survey and existing-utility verification precede excavation; actual permitting and utility-owner response times remain outside the game.', sources:['excavation'] });
+        add('controls', 'Construction entrance, drainage + erosion controls', ['survey'], 1, 'earth', 'earth', 'access', 'Prepare access, separated pedestrian routes and sediment controls before bulk disturbance. Maintain those controls while each work area is open.', {sources:['sequencing','erection']});
+        change('clear', {deps:['controls'], sources:['sequencing']});
+        change('grade', {sources:['sequencing'], lesson:'Cut suitable banks, haul to low areas, spread and compact engineered fill. The scene uses representative cut/fill cells; material suitability, moisture and density testing require project specifications.'});
+        for(const key of ['drain','duct']) change(key, { reachWork:true, deps:['clear'], sources:['excavation','utilities','compaction','water'], lesson:'Work in six short reaches. Excavation leads bedding and installation; a field check releases each reach to backfill, then a density check closes it. Survey capacity is shared with other inspections. Water-system acceptance is a separate package; test timing depends on the specified system.' });
+        add('utility-test', 'Utility testing, flushing + records', ['drain','duct'], 1.5, 'civil', 'test', 'utilities', 'Verify installed utilities with the specified tests, flushing and records before service connections and final surfacing. Water, storm and electrical routes require different acceptance checks; the game groups them into one release.', {gate:true,sources:['water','utilities']});
+        change('formation', {name:'Building-pad formation acceptance',deps:['grade'],sources:['sequencing'],lesson:'Accept the building pad while off-footprint utility crews continue in separate work areas. This is a zone-based handoff, not a requirement to finish all campus earthwork before any foundation.'});
+        for(const h of ['a','b']) {
+            const title=byId[h+'-slab'].name.split(' / ')[0];
+            add(h+'-prep', title+' / foundation excavation + base', ['formation'], 1.5, 'earth', 'earth', h, 'Excavate foundation locations and prepare bearing surfaces and base before formwork and reinforcing.', {sources:['concrete'],quantity:'1 foundation work front'});
+            add(h+'-rebar', title+' / forms, reinforcing + embeds', [h+'-prep'], 1.5, 'concrete', null, h, 'Place forms, reinforcing, anchor assemblies and coordinated embedded services before the concrete crew requests a pour check.', {sources:['concrete'],quantity:'1 prepared pour'});
+            add(h+'-pour-check', title+' / pre-pour inspection', [h+'-rebar'], .5, 'survey', null, h, 'Verify the prepared pour and covered services before concrete placement. This field check is automatic when a survey/inspection crew is available.', {sources:['concrete','utilities'],quantity:'1 pour release'});
+            change(h+'-slab', {name:title+' / concrete placement', deps:[h+'-pour-check'], days:site(id).type==='space'&&h==='a'?5:3, sources:['concrete'],lesson:'Pump, place and finish concrete after the prepared pour is checked. Placement releases the pump and crew; curing and strength verification are separate activities.'});
+            add(h+'-cure', title+' / curing + test wait', [h+'-slab'], 3, null, null, h, 'Elapsed curing/test time continues without an assigned crew or pump. Three scenario days is a gameplay wait, not a real strength prediction or permission to load concrete.', {elapsed:true,outdoor:false,cost:0,sources:['concrete','erection'],quantity:'3 scenario days / elapsed time'});
+            add(h+'-strength', title+' / strength + anchor release', [h+'-cure'], .5, 'survey', null, h, 'Review the representative strength evidence and anchor condition before releasing steel erection. Real erection requires the controlling contractor’s written notification and suitable test evidence; elapsed time alone is insufficient.', {gate:true,sources:['erection'],quantity:'1 erection release'});
+            change(h+'-frame', {deps:[h+'-strength'],sources:['erection']});
+            change(h+'-envelope', {sources:['overlap']});
+            change(h+'-mep', {sources:['commissioning','overlap']});
+            change(h+'-electric', {sources:['commissioning']});
+            change(h+'-fitout', {sources:['commissioning']});
+        }
+        for(const key of ['power','cooling']) {
+            const name=key==='power'?'Power-yard':'Cooling-plant';
+            add(key+'-pad', name+' equipment foundations', ['formation'], 2, 'concrete', 'pump', key, 'Prepare reinforced equipment foundations and cast the supports before delivery and setting of heavy plant.', {sources:['concrete'],quantity:'1 equipment pad'});
+            add(key+'-cure', name+' curing + test wait', [key+'-pad'], 3, null, null, key, 'Reserve elapsed time for curing and test results without occupying the installation crane. The duration is an illustrative game allowance.', {elapsed:true,outdoor:false,cost:0,sources:['concrete'],quantity:'3 scenario days / elapsed time'});
+            add(key+'-ready', name+' foundation release', [key+'-cure'], .5, 'survey', null, key, 'The field team verifies foundation readiness before plant loading. A completed timer alone does not constitute a real structural release.', {sources:['concrete'],quantity:'1 foundation release'});
+            change(key, {deps:[key==='power'?'duct':'drain',key+'-ready'],sources:['commissioning','concrete']});
+        }
+        change('roads', {deps:['utility-test','a-frame','b-frame','power','cooling'],sources:['utilities','erection'],lesson:'Keep haul and crane access until major structure and plant lifts finish. Complete utility acceptance and density records before permanent surfacing and restoration.'});
+        change('release', {deps:['utility-test','power','cooling','a-electric','b-electric'],sources:['commissioning'],lesson:'Check installation records, distribution and mechanical readiness before authorized energization. The game does not energize a campus just because the plant equipment is visible.'});
+        add('startup', 'Vendor startup + pre-functional checks', ['release','a-mep','b-mep'], 2, 'testing', 'test', 'power', 'Verify installation, manufacturer startup and individual equipment operation before system performance tests.', {outdoor:false,sources:['commissioning'],quantity:'1 startup program'});
+        add('functional', 'Functional performance tests', ['startup','a-fitout','b-fitout'], 2, 'testing', 'test', 'cooling', 'Prove individual system operation and control sequences before testing the facility as a whole.', {outdoor:false,sources:['commissioning'],quantity:'1 functional test program'});
+        change('test', {deps:['functional'],sources:['commissioning'],lesson:'After functional tests, verify power, cooling, controls and backup arrangements together under representative load and failure scenarios. The game advances a test sequence, not a live electrical test procedure.'});
+        change('handover', {sources:['commissioning'],lesson:'Resolve the punch list and deliver test records, operating manuals and owner training before acceptance. Construction completion is distinct from operational readiness.'});
+        // Keep the board in dependency order, while allowing independent work fronts to overlap.
+        const ordered=[],pending=tasks.slice();
+        while(pending.length){const i=pending.findIndex(t=>t.deps.every(d=>ordered.some(p=>p.id===d)));if(i<0)throw Error('Construction plan has a dependency cycle');ordered.push(...pending.splice(i,1));}
+        planCache.set(id,ordered);return ordered.slice();
+    }
+    const REACH_COUNT=6;
+    function workPhase(s,t) {
+        if(!t.reachWork)return {label:t.elapsed?'Curing / awaiting test evidence':t.name,end:1};
+        const p=s.tasks[t.id].progress,reach=Math.min(REACH_COUNT-1,Math.floor((p+1e-9)*REACH_COUNT)),f=p*REACH_COUNT-reach;
+        const steps=[{end:.5,label:'Excavate, bed + install',trade:'civil',equipment:'trench'}, {end:.6,label:'Inspect installation before cover',trade:'survey',equipment:null}, {end:.92,label:'Backfill + compact lifts',trade:'civil',equipment:'trench'}, {end:1,label:'Density check + reach records',trade:'survey',equipment:null}];
+        const step=steps.find(step=>f<step.end-1e-8)||steps.at(-1);
+        return {...step,end:(reach+step.end)/REACH_COUNT,reach:reach+1,label:'Reach '+(reach+1)+'/'+REACH_COUNT+' / '+step.label};
+    }
     function create(id) {
         id = site(id).id;
-        return { version: 1, site: id, day: 0, running: false, speed: 1, complete: false, spent: 0, budget: site(id).type === 'fab' ? 33000000 : site(id).type === 'space' ? 32000000 : 31000000, laborHours: 0, idleDays: 0, peakWorkers: 0,
+        return { version: 2, site: id, day: 0, running: false, speed: 1, complete: false, spent: 0, budget: site(id).type === 'fab' ? 33000000 : site(id).type === 'space' ? 32000000 : 31000000, laborHours: 0, idleDays: 0, peakWorkers: 0,
             crews: Object.fromEntries(Object.keys(TRADES).map(k => [k, 1])), equipment: Object.fromEntries(Object.keys(EQUIPMENT).map(k => [k, k === 'lift' ? 2 : 1])),
             tasks: Object.fromEntries(plan(id).map(t => [t.id, { progress: 0, enabled: false, accepted: false, started: false, priority: 0, start: null, finish: null }])),
             orders: Object.fromEntries(Object.keys(MATERIALS).map(k => [k, { ordered: false, arrival: null, used: 0, expedited: false }])), log: [] };
@@ -90,7 +156,7 @@
         const state = s.tasks[t.id];
         if (state.accepted) return 'Complete';
         if (state.progress >= 1) return 'Inspection release needed';
-        if (!state.enabled) return 'Not dispatched';
+        if (!state.enabled && !t.elapsed) return 'Not dispatched';
         const missing = t.deps.filter(id => !done(s, id));
         if (missing.length) return 'Waiting for ' + missing.map(id => plan(s.site).find(x => x.id === id).name).join(', ');
         if (t.material && !state.started) {
@@ -103,16 +169,18 @@
         return 'Ready';
     }
     function allocation(s) {
-        const labor = { ...s.crews }, equipment = { ...s.equipment }, active = [], reasons = {};
+        const labor = { ...s.crews }, equipment = { ...s.equipment }, active = [], passive = [], reasons = {};
         const tasks = plan(s.site).sort((a, b) => s.tasks[b.id].priority - s.tasks[a.id].priority || Number(s.tasks[b.id].started) - Number(s.tasks[a.id].started));
-        for (const t of tasks) {
+        for (const original of tasks) {
+            const phase=workPhase(s,original),t={...original,...(original.reachWork?{trade:phase.trade,equipment:phase.equipment}:{}),phase:phase.label};
             let why = readiness(s, t);
+            if (why==='Ready' && t.elapsed) { passive.push(t); reasons[t.id]='Curing / test wait'; continue; }
             if (why === 'Ready' && labor[t.trade] < 1) why = 'Waiting for ' + TRADES[t.trade].name.toLowerCase();
             if (why === 'Ready' && t.equipment && equipment[t.equipment] < 1) why = 'Waiting for ' + EQUIPMENT[t.equipment].name.toLowerCase();
             if (why === 'Ready') { active.push(t); labor[t.trade]--; if (t.equipment) equipment[t.equipment]--; }
             reasons[t.id] = why === 'Ready' ? 'Working' : why;
         }
-        return { active, reasons, labor, equipment };
+        return { active, passive, reasons, labor, equipment };
     }
     function dispatch(s, id, enabled) {
         if (s.complete) return;
@@ -149,16 +217,16 @@
         // Small deterministic slices preserve dependency and equipment ownership across speed settings.
         let left = Math.min(days, 20);
         while (left > 1e-8) {
-            const dt = Math.min(.05, left), { active } = allocation(s), w = weather(s);
+            const dt = Math.min(.05, left), { active, passive } = allocation(s), w = weather(s);
             const workers = active.reduce((n, t) => n + TRADES[t.trade].people, 0);
             s.peakWorkers = Math.max(s.peakWorkers, workers); s.laborHours += workers * 8 * dt;
             const daily = Object.entries(s.crews).reduce((n, [k, count]) => n + count * TRADES[k].rate, 0) + Object.entries(s.equipment).reduce((n, [k, count]) => n + count * EQUIPMENT[k].rate, 0) + 12000;
             s.spent += daily * dt;
             if (!active.length) s.idleDays += dt;
-            for (const t of active) {
+            for (const t of [...active,...passive]) {
                 const state = s.tasks[t.id];
                 if (!state.started) { state.started = true; state.start = s.day; if (t.material) s.orders[t.material].used++; }
-                const amount = Math.min(1 - state.progress, dt / t.days * (t.outdoor ? w.factor : 1));
+                const amount = Math.min(workPhase(s,t).end - state.progress, dt / t.days * (t.outdoor ? w.factor : 1));
                 state.progress += amount; s.spent += amount * t.cost;
                 if (state.progress >= 1 - 1e-8) {
                     state.progress = 1; state.accepted = !t.gate; state.finish = t.gate ? null : s.day + dt;
@@ -180,20 +248,29 @@
     function decode(raw) {
         try {
             const data = JSON.parse(raw);
-            if (!data || data.version !== 1 || !SITES.some(s => s.id === data.site)) return null;
-            const s = create(data.site), finite = n => Number.isFinite(n) && n >= 0;
+            if (!data || ![1,2].includes(data.version) || !SITES.some(s => s.id === data.site)) return null;
+            const s = create(data.site), tasks=data.version===1?legacyPlan(data.site):plan(data.site), finite = n => Number.isFinite(n) && n >= 0;
             for (const k of ['day', 'spent', 'laborHours', 'idleDays', 'peakWorkers']) { if (!finite(data[k]) || data[k] > 1e12) return null; s[k] = data[k]; }
             for (const group of ['crews', 'equipment']) for (const key of Object.keys(s[group])) { const n = data[group]?.[key]; if (!Number.isInteger(n) || n < 0 || n > 3) return null; s[group][key] = n; }
-            for (const t of plan(s.site)) {
+            for (const t of tasks) {
                 const v = data.tasks?.[t.id];
                 if (!v || !finite(v.progress) || v.progress > 1 || typeof v.accepted !== 'boolean' || typeof v.started !== 'boolean' || typeof v.enabled !== 'boolean' || ![0, 1].includes(v.priority)) return null;
                 if ((v.accepted && v.progress !== 1) || (v.progress > 0 && !v.started)) return null;
                 if (![v.start, v.finish].every(n => n === null || finite(n) && n <= s.day + .1)) return null;
                 s.tasks[t.id] = { ...v };
             }
-            for (const t of plan(s.site)) if (s.tasks[t.id].started && !t.deps.every(id => s.tasks[id].accepted)) return null;
+            if(data.version===1){
+                if(tasks.some(t=>s.tasks[t.id].started&&!t.deps.every(id=>s.tasks[id].accepted)))return null;
+                const legacyIds=new Set(tasks.map(t=>t.id)),modern=plan(s.site),credited=new Set();
+                const credit=(id,day)=>{if(legacyIds.has(id)||credited.has(id))return;const t=modern.find(t=>t.id===id);for(const d of t.deps)credit(d,day);s.tasks[id]={progress:1,enabled:true,accepted:true,started:true,priority:0,start:day,finish:day};credited.add(id);};
+                // Existing downstream work is retained. Only newly introduced prerequisites receive legacy credit.
+                for(const t of modern)if(legacyIds.has(t.id)&&s.tasks[t.id].started)for(const d of t.deps)credit(d,s.tasks[t.id].start||0);
+                for(const t of modern)if(!legacyIds.has(t.id)&&!credited.has(t.id))s.tasks[t.id].enabled=tasks.some(old=>s.tasks[old.id].enabled);
+                s.migratedFrom=1;s.legacyCredits=[...credited];s.legacyWaivers=modern.flatMap(t=>legacyIds.has(t.id)&&s.tasks[t.id].started?t.deps.filter(d=>!s.tasks[d].accepted).map(d=>t.id+':'+d):[]);
+            }else if(data.migratedFrom===1){s.migratedFrom=1;s.legacyCredits=Array.isArray(data.legacyCredits)?data.legacyCredits.filter(id=>typeof id==='string'&&s.tasks[id]?.accepted):[];const old=legacyPlan(s.site);s.legacyWaivers=Array.isArray(data.legacyWaivers)?data.legacyWaivers.filter(pair=>typeof pair==='string'&&tasks.some(t=>t.deps.some(d=>pair===t.id+':'+d)&&old.some(o=>o.id===t.id&&!o.deps.includes(pair.split(':')[1])))):[];}
+            for (const t of tasks) if (s.tasks[t.id].started && !t.deps.every(id => s.tasks[id].accepted || s.legacyWaivers?.includes(t.id+':'+id))) return null;
             for (const k of Object.keys(MATERIALS)) {
-                const o = data.orders?.[k], used = plan(s.site).filter(t => t.material === k && s.tasks[t.id].started).length;
+                const o = data.orders?.[k], used = tasks.filter(t => t.material === k && s.tasks[t.id].started).length;
                 if (!o || typeof o.ordered !== 'boolean' || typeof o.expedited !== 'boolean' || o.used !== used || used > MATERIALS[k].quantity || (o.ordered ? !finite(o.arrival) : o.arrival !== null || used > 0)) return null;
                 s.orders[k] = { ...o };
             }
@@ -202,5 +279,5 @@
             return s;
         } catch (_) { return null; }
     }
-    return { SITES, TRADES, EQUIPMENT, MATERIALS, site, plan, create, done, weather, readiness, allocation, dispatch, order, expedite, capacity, inspect, advance, progress, report, decode };
+    return { SITES, TRADES, EQUIPMENT, MATERIALS, PROCESS_SOURCES, workPhase, site, plan, create, done, weather, readiness, allocation, dispatch, order, expedite, capacity, inspect, advance, progress, report, decode };
 });

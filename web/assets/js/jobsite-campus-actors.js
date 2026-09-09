@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { clamp, mix, smooth, cycle, earthCycle, earthHeight, earthProfile, trenchStages, trenchX, trenchDepth, armAngles, parkingBay, arrivalPose, workLocation, pedestrianRoute, pathPoint, roadPoint } from './jobsite-campus-activity.mjs';
+import { clamp, mix, smooth, cycle, earthCycle, earthHeight, earthProfile, trenchStages, trenchX, trenchDepth, foundationDepth, armAngles, parkingBay, arrivalPose, workLocation, pedestrianRoute, pathPoint, roadPoint } from './jobsite-campus-activity.mjs';
 const C = window.JobsiteCampus;
 const DIRT = 0x92764e, STEEL = 0x414b4e, YELLOW = 0xe5b548;
 const progress = (s, id) => s.tasks[id]?.progress || 0;
@@ -13,7 +13,7 @@ export class CampusActivity {
         this.excavators = [this.excavator(), this.excavator()];
         this.trucks = [this.truck(), this.truck(), this.truck(), this.truck()];
         this.dozers = [this.dozer(), this.dozer()]; this.roller = this.dozer(true);
-        this.utilityExcavator = this.excavator(); this.backhoe = this.excavator(.78); this.pipeCarrier = this.group();
+        this.trenchCompactor=this.dozer(true);this.utilityExcavator = this.excavator(); this.backhoe = this.excavator(.78); this.pipeCarrier = this.group();
         const pipe = view.cyl(.3, 4.3, [0, 0, 0], 0x5f858d, this.pipeCarrier); pipe.rotation.z = Math.PI / 2;
         this.trenchBox = this.group();
         for (const z of [-1.32, 1.32]) view.box([8, 1.9, .18], [0, -.35, z], 0x9badae, this.trenchBox, .5);
@@ -28,6 +28,10 @@ export class CampusActivity {
         view.beam([0,0,-.7],[0,1.7,0],.07,0xe8bd59,this.survey);view.box([.45,.4,.35],[0,1.9,0],0xe5dfd0,this.survey);
         this.rod = this.group();view.box([.09,3,.09],[0,1.5,0],0xf2e1c0,this.rod);
         for(let y=.25;y<3;y+=.5)view.box([.1,.18,.1],[0,y,0],0xb94f32,this.rod);
+        this.erosion=this.group();for(let i=0;i<30;i++){view.box([4.8,.7,.08],[-72+i*5,.2,58],0x473f33,this.erosion);}
+        this.cureSigns=view.halls.map(h=>({key:h.key,sign:this.label('CURING / TEST WAIT',h.g.position.x,17,17)}));
+        this.testRig=this.group();for(let i=0;i<3;i++){const unit=this.group(this.testRig,-9+i*3,0,-31);view.box([2,2,1.3],[0,1,0],0x657076,unit);view.box([1.5,.8,.06],[0,1.3,.7],0x24343a,unit);view.beam([0,.1,0],[0,.1,-4],.08,0x32302b,unit);}
+        this.testSign=this.label('SYSTEM VERIFICATION',-6,-28,15);
         this.buildRoadWork(); this.update(state, 0, C.allocation(state).active);
     }
     group(parent = this.v.root, x = 0, y = 0, z = 0) { return this.v.group(parent,x,y,z); }
@@ -126,7 +130,7 @@ export class CampusActivity {
     }
     movePerson(person, target, key, dt, s) {
         if(!person.position){person.position = s.day>1.4 || person.trade==='survey' ? target.slice() : parkingBay(person.car||0).map((v,i)=>i===0?v+1.5:v);person.target=person.position.slice();person.key='arrival';}
-        if(person.key!==key || Math.hypot(target[0]-person.target[0],target[2]-person.target[2])>5){person.route=pedestrianRoute(person.position,target);person.walked=0;person.target=person.position.slice();person.key='arrival';}
+        if(person.key!==key || Math.hypot(target[0]-person.target[0],target[2]-person.target[2])>5){person.route=pedestrianRoute(person.position,target);person.walked=0;person.target=target.slice();person.key=key;}
         if(!person.route && Math.hypot(target[0]-person.position[0],target[2]-person.position[2])>.8){person.route=[person.position.slice(),target.slice()];person.walked=0;person.target=target.slice();}
         let walking=false;
         if(person.route && s.running){
@@ -164,21 +168,24 @@ export class CampusActivity {
         for(const wheel of model.wheels||[])wheel.rotation.x=this.clock*2;
     }
     terrainUpdate(s) {
-        const grade=progress(s,'grade'),drain=progress(s,'drain'),duct=progress(s,'duct'),key=[grade,drain,duct].map(p=>p.toFixed(3)).join(':');if(key===this.terrainKey)return;this.terrainKey=key;
+        const grade=progress(s,'grade'),drain=progress(s,'drain'),duct=progress(s,'duct'),a=progress(s,'a-prep'),b=progress(s,'b-prep'),ap=progress(s,'a-slab'),bp=progress(s,'b-slab'),key=[grade,drain,duct,a,b,ap,bp].map(p=>p.toFixed(3)).join(':');if(key===this.terrainKey)return;this.terrainKey=key;
         const vertices=this.terrain.geometry.attributes.position,profile=earthProfile(grade);
         if(!this.terrainWeights)this.terrainWeights=Array.from({length:vertices.count},(_,i)=>profile.map(c=>[Math.exp(-((vertices.getX(i)-c.cut[0])**2/75+(vertices.getZ(i)-c.cut[1])**2/30))*1.8,Math.exp(-((vertices.getX(i)-c.fill[0])**2/100+(vertices.getZ(i)-c.fill[1])**2/36))*1.05]));
-        for(let i=0;i<vertices.count;i++){const x=vertices.getX(i),z=vertices.getZ(i),height=profile.reduce((h,c,j)=>h+this.terrainWeights[i][j][0]*c.cutRemaining-this.terrainWeights[i][j][1]*c.fillRemaining,-.08);vertices.setY(i,height+trenchDepth(x,z,drain,30)+trenchDepth(x,z,duct,33.5));}
+        for(let i=0;i<vertices.count;i++){const x=vertices.getX(i),z=vertices.getZ(i),height=profile.reduce((h,c,j)=>h+this.terrainWeights[i][j][0]*c.cutRemaining-this.terrainWeights[i][j][1]*c.fillRemaining,-.08);vertices.setY(i,height+trenchDepth(x,z,drain,30)+trenchDepth(x,z,duct,33.5)+foundationDepth(x,z,a,ap,-28)+foundationDepth(x,z,b,bp,30));}
         vertices.needsUpdate=true;this.terrain.geometry.computeVertexNormals();this.terrain.geometry.computeBoundingSphere();
     }
     update(s,dt,active) {
         if(s.running)this.clock+=dt*s.speed;
         this.active=active;this.terrainUpdate(s);const v=this.v;
-        const earthTask=active.find(t=>t.equipment==='earth'),trenchTask=active.find(t=>t.equipment==='trench');
+        const earthTask=active.find(t=>t.equipment==='earth'),trenchTask=active.find(t=>t.reachWork);
         this.earth=[earthCycle(progress(s,'grade'),0),earthCycle(progress(s,'grade'),1)];
-        this.excavators.forEach((m,i)=>{const e=this.earth[i],working=earthTask?.id==='grade';m.g.visible=s.equipment.earth>0;this.poseExcavator(m,working?[e.machine[0],earthHeight(e.machine[0],e.machine[2],progress(s,'grade')),e.machine[2]]:[57+i*7,0,34],working?e.bucket:[53+i*7,1,30],working&&e.soil,e.phase>.43&&e.phase<.5?-.8:0);});
+        this.excavators.forEach((m,i)=>{const e=this.earth[i],working=earthTask?.id==='grade';m.g.visible=s.equipment.earth>0;if(i===0&&earthTask?.id.endsWith('-prep')){const p=workLocation(earthTask,progress(s,earthTask.id)),f=(progress(s,earthTask.id)*10)%1;this.poseExcavator(m,[p[0]+6,0,p[2]],[p[0],-Math.sin(f*Math.PI)*.8,p[2]],f>.3&&f<.7);return;}this.poseExcavator(m,working?[e.machine[0],earthHeight(e.machine[0],e.machine[2],progress(s,'grade')),e.machine[2]]:[57+i*7,0,34],working?e.bucket:[53+i*7,1,30],working&&e.soil,e.phase>.43&&e.phase<.5?-.8:0);});
         this.trucks.forEach((truck,i)=>{truck.g.visible=s.equipment.earth>0;const e=this.earth[i%2],working=earthTask?.id==='grade'&&i<2;const point=working?e.truck:[57+(i%2)*7,0,17+Math.floor(i/2)*10];const ahead=working?earthCycle(Math.min(1,progress(s,'grade')+.0002),i%2).truck:null;if(working)point[1]=earthHeight(point[0],point[2],progress(s,'grade'));this.placeVehicle(truck,point,ahead);truck.bed.rotation.x=working?e.tip:0;truck.load.visible=working&&e.payload>0;});
-        [...this.dozers,this.roller].forEach((m,i)=>{m.g.visible=s.equipment.earth>0;if(earthTask?.id==='grade'){const e=this.earth[i%2];const pass=clamp((e.phase-.74)/.26);m.g.position.set(e.fillPoint[0]-6+pass*12,0,e.fillPoint[1]+(i===2?9:1));m.g.position.y=earthHeight(m.g.position.x,m.g.position.z,progress(s,'grade'));m.g.rotation.y=-Math.PI/2;m.dirt.visible=e.phase>.73&&e.phase<.92&&i<2;}else if(earthTask){const p=clamp(progress(s,earthTask.id)-i*.015),a=roadPoint(p),b=roadPoint(Math.min(1,p+.002));this.placeVehicle(m,a,b);m.dirt.visible=i<2&&earthTask.id==='clear';}else{m.g.position.set(57+i*6,0,45);m.dirt.visible=false;}});
+        [...this.dozers,this.roller].forEach((m,i)=>{m.g.visible=s.equipment.earth>0;if(earthTask?.id==='grade'){const e=this.earth[i%2];const pass=clamp((e.phase-.74)/.26);m.g.position.set(e.fillPoint[0]-6+pass*12,0,e.fillPoint[1]+(i===2?9:1));m.g.position.y=earthHeight(m.g.position.x,m.g.position.z,progress(s,'grade'));m.g.rotation.y=-Math.PI/2;m.dirt.visible=e.phase>.73&&e.phase<.92&&i<2;}else if(earthTask?.id.endsWith('-prep')){const p=workLocation(earthTask,progress(s,earthTask.id));m.g.position.set(p[0]-6-i*4,0,p[2]+4);m.dirt.visible=false;}else if(earthTask){const p=clamp(progress(s,earthTask.id)-i*.015),a=roadPoint(p),b=roadPoint(Math.min(1,p+.002));this.placeVehicle(m,a,b);m.dirt.visible=i<2&&earthTask.id==='clear';}else{m.g.position.set(57+i*6,0,45);m.dirt.visible=false;}});
         this.roadTiles.forEach((tile,i)=>{tile.visible=i/64<progress(s,'clear');tile.material=v.mat(i/64<progress(s,'roads')?0x44494b:0x928978);});
+        this.erosion.children.forEach((m,i)=>m.visible=i/30<progress(s,'controls'));
+        this.cureSigns.forEach(({key,sign})=>sign.visible=C.done(s,key+'-slab')&&!C.done(s,key+'-strength'));
+        this.testRig.visible=this.testSign.visible=active.some(t=>['release','startup','functional','test'].includes(t.id));
         this.updateTrench(s,trenchTask);this.updatePumps(s,active);this.updateLifts(s,active);
         const cars=Math.min(32,Math.ceil(Object.entries(s.crews).reduce((n,[k,c])=>n+c*C.TRADES[k].people,0)/4));let parked=0;
         this.cars.forEach((car,i)=>{const pose=arrivalPose(i,s.day);car.g.visible=i<cars&&(pose.visible||s.day>1.5);if(car.g.visible){const ahead=arrivalPose(i,s.day+.001).position;this.placeVehicle(car,pose.position,ahead);if(pose.parked){car.g.rotation.y=i<16?0:Math.PI;parked++;}}});this.parkedCount=parked;
@@ -189,19 +196,21 @@ export class CampusActivity {
         if(focusTask?.id==='grade'){const e=this.earth[0];this.focus=e.phase>.5?e.truck.slice():[e.machine[0]+3,0,e.machine[2]+3];}
         if(focusTask&&(focusTask.equipment==='crane'||focusTask.equipment==='pump')&&['a','b'].includes(focusTask.zone)){this.focus=[(focusTask.zone==='a'?-28:30)+5,focusTask.equipment==='crane'?5:0,this.focus[2]];}
         if(focusTask?.id==='a-frame'&&C.site(s.site).type==='space')this.focus=[-36,progress(s,'a-frame')*52,0];
-        this.focusTask=focusTask;this.title=focusTask?focusTask.name:s.day<1.5?'Morning mobilization':'Crews at the site compound';
-        this.detail=focusTask?.id==='grade'?this.earth[0].label:trenchTask&&focusTask===trenchTask?'Excavate / bed and set pipe / backfill in sequence':focusTask?.equipment==='crane'?'Rig / hoist / set / release':focusTask?.equipment==='pump'?'Form and reinforce / pump concrete / finish the slab':focusTask?'Assigned crews at the work front':'Park, check in and walk to the work area';
+        const curing=C.allocation(s).passive; if(!focusTask&&curing.length)this.focus=workLocation(curing[0],0);
+        this.focusTask=focusTask;this.title=focusTask?focusTask.name:curing.length?'Concrete curing / awaiting test evidence':s.day<1.5?'Morning mobilization':'Crews at the site compound';
+        this.detail=focusTask?.id==='grade'?this.earth[0].label:trenchTask&&focusTask===trenchTask?C.workPhase(s,trenchTask).label:focusTask?.equipment==='crane'?'Rig / hoist / set / release':focusTask?.equipment==='pump'?'Place concrete / finish / release the pump':focusTask?'Assigned crews at the work front':curing.length?'Elapsed wait / foundation release still required':'Park, check in and walk to the work area';
         v.canvas.dataset.visibleWorkers=this.workerCount;v.canvas.dataset.walkingWorkers=this.walkingCount;v.canvas.dataset.parkedCars=this.parkedCount;v.canvas.dataset.activityPhase=this.clock.toFixed(3);v.canvas.dataset.terrainVersion=this.terrainKey;
     }
     updateTrench(s,task) {
-        const v=this.v,p=task?progress(s,task.id):progress(s,'duct')||progress(s,'drain'),z=task?.id==='duct'?33.5:30,st=trenchStages(p),phase=(p*27)%1;
-        const dig=trenchX(st.dig),pipe=trenchX(st.pipe),fill=trenchX(st.fill);const working=!!task;
+        const v=this.v,front=task||C.plan(s.site).find(t=>t.reachWork&&s.tasks[t.id].started&&progress(s,t.id)<1),p=front?progress(s,front.id):1,z=front?.id==='duct'?33.5:30,st=trenchStages(p),phase=(p*6)%1;
+        const dig=trenchX(st.dig),pipe=trenchX(st.pipe),fill=trenchX(st.fill);const working=!!front,installing=!!task&&phase<.5,backfilling=!!task&&phase>=.6&&phase<.92;
         this.utilityExcavator.g.visible=this.backhoe.g.visible=s.equipment.trench>0;
-        this.poseExcavator(this.utilityExcavator,working?[dig,0,z-6]:[-61,0,42],working?[dig,mix(.2,-1.3,Math.sin(phase*Math.PI)**2),z]:[-57,1,38],working&&phase>.25&&phase<.7);
-        this.poseExcavator(this.backhoe,working?[fill-2,0,z-6]:[-64,0,34],working?[fill-2,phase<.5?1.2:0,z+(phase<.5?4:0)]:[-59,1,32],working&&phase<.5);
+        this.poseExcavator(this.utilityExcavator,working?[dig,0,z-6]:[-61,0,42],working?[dig,installing?mix(.2,-1.3,Math.sin(phase*2*Math.PI)**2):1.4,z]:[-57,1,38],installing&&phase>.15&&phase<.4);
+        this.poseExcavator(this.backhoe,working?[fill-2,0,z-6]:[-64,0,34],working?[fill-2,backfilling?.4:1.5,z+(backfilling?0:4)]:[-59,1,32],backfilling);
+        this.trenchCompactor.g.visible=backfilling;this.trenchCompactor.g.position.set(fill-4,0,z);
         this.trenchBox.visible=working&&st.pipe>0&&st.fill<24;this.trenchBox.position.set(pipe-3,0,z);
-        this.pipeCarrier.visible=working&&st.pipe>0&&st.pipe<24;this.pipeCarrier.position.set(pipe-2,mix(.5,-1.05,smooth(phase)),z);
-        this.spoil.forEach((pile,i)=>{const state=trenchStages(progress(s,task?.id||'drain'));pile.visible=i<state.dig&&i>=state.fill;pile.position.z=z+(task?.id==='duct'?3.2:5);pile.scale.y=Math.max(.05,clamp(state.dig-i)*clamp(i-state.fill+1));});
+        this.pipeCarrier.visible=installing&&st.pipe>0&&st.pipe<24;this.pipeCarrier.position.set(pipe-2,mix(.5,-1.05,smooth(phase)),z);
+        this.spoil.forEach((pile,i)=>{const state=st;pile.visible=i<state.dig&&i>=state.fill;pile.position.z=z+(front?.id==='duct'?3.2:5);pile.scale.y=Math.max(.05,clamp(state.dig-i)*clamp(i-state.fill+1));});
         this.bedding.forEach((bed,i)=>{bed.visible=i<st.pipe;bed.position.z=z;});
         this.pipes.forEach((pieces,line)=>{const stage=trenchStages(progress(s,line?'duct':'drain'));pieces.forEach((piece,i)=>piece.visible=i+1<=stage.pipe);});
     }
@@ -210,7 +219,7 @@ export class CampusActivity {
     }
     updatePumps(s,active) {
         const tasks=active.filter(t=>t.equipment==='pump');
-        this.pumps.forEach((p,i)=>{p.truck.g.visible=p.mixer.g.visible=i<tasks.length;if(!tasks[i])return;const task=tasks[i],amount=progress(s,task.id),target=workLocation(task,amount),x=task.zone==='a'?-2:57;this.placeVehicle(p.truck,[x,0,target[2]],null);this.placeVehicle(p.mixer,[x+1,0,target[2]+8],null);p.drum.rotation.z=this.clock*.8;
+        this.pumps.forEach((p,i)=>{p.truck.g.visible=p.mixer.g.visible=i<tasks.length;if(!tasks[i])return;const task=tasks[i],amount=progress(s,task.id),target=workLocation(task,amount),x=task.zone==='a'?-2:task.zone==='b'?57:target[0]+7;this.placeVehicle(p.truck,[x,0,target[2]],null);this.placeVehicle(p.mixer,[x+1,0,target[2]+8],null);p.drum.rotation.z=this.clock*.8;
             const local=[target[0]-x,.8,0],points=[[0,3,0],[0,13,-3],[local[0]/2,15,0],[local[0],6,0]];p.arms.forEach((arm,j)=>this.setBeam(arm,points[j],points[j+1]));p.hose.position.set(local[0],3.4,0);p.hose.scale.y=5.2;p.boom.visible=amount>.25;
         });
     }

@@ -11,7 +11,7 @@ function run(s, days = 250, inspections = true, slice = .1) {
 }
 for (const p of C.SITES) test(p.id + ': complete project with dependencies, stock conservation and exclusive resources', () => {
     const s = ready(p.id), tasks = C.plan(p.id);
-    assert.equal(tasks.length, 24);
+    assert.equal(tasks.length, 44);
     assert.equal(new Set(tasks.map(t => t.id)).size, tasks.length);
     for (let i = 0; i < 1500 && !s.complete; i++) {
         const a = C.allocation(s);
@@ -28,6 +28,8 @@ for (const p of C.SITES) test(p.id + ': complete project with dependencies, stoc
 test('unreleased inspections block construction and handover', () => {
     const s = run(ready(), 50, false); assert.equal(s.tasks.formation.progress, 1); assert.equal(s.tasks['a-slab'].progress, 0); assert.equal(s.complete, false);
     assert.equal(C.inspect(s, 'handover'), false); assert.equal(C.inspect(s, 'formation'), true);
+    run(s, 40, false); assert.equal(s.tasks['a-strength'].progress,1);assert.equal(s.tasks['a-frame'].progress,0);
+    for(const id of ['utility-test','a-strength','b-strength'])C.inspect(s,id);
     run(s, 80, false); assert.equal(s.tasks.release.progress, 1); assert.equal(s.tasks.test.progress, 0);
     C.inspect(s, 'release'); run(s, 80, false); assert.equal(s.tasks.handover.progress, 1); assert.equal(s.complete, false);
     C.inspect(s, 'handover'); assert.equal(s.complete, true);
@@ -61,9 +63,9 @@ test('demobilizing a crew parks its assignment, lowers payroll and permits later
     C.capacity(s, 'crews', 'survey', 1); C.advance(s, 1); assert.ok(s.tasks.survey.progress > progress);
 });
 test('priority redirects a scarce crane; weather holds cranes without stopping indoor trades', () => {
-    const s = ready(); run(s, 27); s.running = false;
+    const s = ready();let candidates=[];for(let i=0;i<1500&&candidates.length<2;i++){run(s,.1);candidates=C.plan(s.site).filter(t=>t.equipment==='crane'&&C.readiness(s,t)==='Ready');}s.running=false;
     // Reach the shared structure front through normal construction, then compare allocation.
-    const candidates = C.plan(s.site).filter(t => t.equipment === 'crane' && C.readiness(s, t) === 'Ready');
+    candidates = C.plan(s.site).filter(t => t.equipment === 'crane' && C.readiness(s, t) === 'Ready');
     assert.ok(candidates.length >= 2);
     const pick = candidates[candidates.length - 1]; s.tasks[pick.id].priority = 1;
     assert.ok(C.allocation(s).active.some(t => t.id === pick.id));
@@ -72,7 +74,7 @@ test('priority redirects a scarce crane; weather holds cranes without stopping i
 test('save round-trip is paused, preserves partial work and rejects corrupted/future data', () => {
     const s = ready('terafab'); run(s, 24); const copy = C.decode(JSON.stringify(s)); assert.ok(copy); assert.equal(copy.running, false); assert.deepEqual(copy.tasks, s.tasks); assert.deepEqual(copy.orders, s.orders);
     copy.running = true; run(copy); assert.ok(copy.complete);
-    assert.equal(C.decode('{bad'), null); assert.equal(C.decode(JSON.stringify({ ...s, version: 2 })), null);
+    assert.equal(C.decode('{bad'), null); assert.equal(C.decode(JSON.stringify({ ...s, version: 3 })), null);
     const invalid = JSON.parse(JSON.stringify(s)); invalid.tasks.handover.progress = 1; invalid.tasks.handover.accepted = true; assert.equal(C.decode(JSON.stringify(invalid)), null);
     const badStock = JSON.parse(JSON.stringify(s)); badStock.orders.steel.used = 99; assert.equal(C.decode(JSON.stringify(badStock)), null);
 });

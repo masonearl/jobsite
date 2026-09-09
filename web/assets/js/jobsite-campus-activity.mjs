@@ -50,8 +50,9 @@ export function earthHeight(x,z,progress) {
     return earthProfile(progress).reduce((h,cell)=>h+Math.exp(-((x-cell.cut[0])**2/75+(z-cell.cut[1])**2/30))*1.8*cell.cutRemaining-Math.exp(-((x-cell.fill[0])**2/100+(z-cell.fill[1])**2/36))*1.05*cell.fillRemaining,-.08);
 }
 export function trenchStages(progress) {
-    const head = clamp(progress) * (TRENCH_CELLS + 3);
-    return { dig: Math.min(TRENCH_CELLS, head), pipe: Math.max(0, Math.min(TRENCH_CELLS, head - 1.5)), fill: Math.max(0, Math.min(TRENCH_CELLS, head - 3)) };
+    if(progress>=1)return {dig:24,pipe:24,fill:24};
+    const reach=Math.floor(clamp(progress)*6),phase=clamp(progress)*6-reach,base=reach*4;
+    return {dig:base+4*clamp(phase/.3),pipe:base+4*clamp((phase-.12)/.38),fill:base+4*clamp((phase-.6)/.32)};
 }
 export function trenchX(front) { return -58 + Math.min(TRENCH_CELLS, Math.max(0, front)) * 4.8; }
 export function trenchDepth(x, z, progress, center = 30) {
@@ -73,16 +74,18 @@ export function arrivalPose(index, day) {
 }
 export function workLocation(task, progress, worker = 0) {
     if (task.id === 'survey') return [-53 + Math.sin(progress * Math.PI * 2) * 12, 0, 35 - progress * 50];
-    if (task.id === 'clear') { const p=roadPoint(progress); return [p[0]+4,0,p[2]+4]; }
+    if (task.id === 'clear' || task.id === 'controls') { const p=roadPoint(progress); return [p[0]+4,0,p[2]+4]; }
     if (task.id === 'grade') { const p = earthCycle(progress); return [p.cutPoint[0] - 2, 0, p.cutPoint[1] + 10]; }
-    if (task.id === 'drain' || task.id === 'duct') { const stage=trenchStages(progress), z=task.id==='duct'?33.5:30;return [trenchX(stage.pipe) - 2, worker % 3 ? -1.3 : 0, z + (worker % 3 ? 0 : 3)]; }
+    if (task.id === 'drain' || task.id === 'duct') { const stage=trenchStages(progress), z=task.id==='duct'?33.5:30;const phase=(progress*6)%1,checking=task.trade==='survey',backfilling=phase>=.6;return [trenchX(backfilling?stage.fill:stage.pipe)-2, !checking&&!backfilling&&worker%3 ? -1.3 : 0, z+(!checking&&!backfilling&&worker%3?0:4)]; }
     if (task.zone === 'a' || task.zone === 'b') {
         const x = task.zone === 'a' ? -28 : 30;
+        if (task.id.endsWith('-prep')||task.id.endsWith('-rebar')||task.id.endsWith('-pour-check')||task.id.endsWith('-strength')) { const footing=Math.min(9,Math.floor(progress*10));return[x+(footing%2?18:-18),0,-23+Math.floor(footing/2)*10];}
         if (task.id.endsWith('-slab')) { if(progress<.25){const footing=Math.min(9,Math.floor(progress/.25*10));return[x+(footing%2?18:-18),0,-23+Math.floor(footing/2)*10];} const pour = cycle(Math.max(0, (progress - .25) / .75), 10); return [x - 17 + pour.phase * 34, .6, -25 + pour.index * 4.8]; }
         if(task.id.endsWith('-fitout')){const rack=Math.min(47,Math.floor(progress*48));return[x-13+Math.floor(rack/8)*6,.6,-20+(rack%8)*4.7];}
         if (task.id.endsWith('-frame')) return [x + (worker % 2 ? 18 : -18), .6, -25 + Math.floor(progress * 5) * 11];
         return [x - 14 + worker % 5 * 6, .6, -18 + Math.floor(progress * 6) * 6];
     }
+    if(task.id.endsWith('-pad')){const cell=Math.min(5,Math.floor(progress*6));return[(task.zone==='power'?-41:32)+(cell%3)*7,0,-38+Math.floor(cell/3)*8];}
     return { utilities:[0,0,30], power:[-35,0,-34], cooling:[39,0,-34], access:[-47,0,45], yard:[-3,0,25] }[task.zone] || [0,0,25];
 }
 // Pedestrians use the southern walkway before entering a work front, avoiding completed halls.
@@ -95,3 +98,8 @@ export function pedestrianRoute(from, to) {
     return path;
 }
 export const roadPoint = progress => pathPoint([[-69,0,53],[-69,0,-53],[69,0,-53],[69,0,53],[-69,0,53]], progress);
+
+export function foundationDepth(x,z,prep,pour,center){
+    for(let i=0;i<10;i++){const px=center+(i%2?18:-18),pz=-23+Math.floor(i/2)*10;if(Math.abs(x-px)<2.3&&Math.abs(z-pz)<2.3)return -.85*clamp(prep*10-i)*(1-clamp(pour*40-i));}
+    return 0;
+}

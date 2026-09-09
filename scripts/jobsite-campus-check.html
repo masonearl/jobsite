@@ -47,12 +47,13 @@ async function run(){
   click('tab-resources');const add=doc().querySelector('[aria-label="Add one Steel + enclosure crew"]');add.click();await sleep(300);result('Resource dispatch changes workforce',el('labor-roster').textContent.includes('2 crews'));
   click('tab-work');click('run-project');await until(()=>get('next-title')==='Inspection hold.');
   result('Foundation work waits for inspection',doc().querySelector('[data-task="a-slab"] .work-amount span').textContent==='0%');click('next-action');
+  const earlyDeadline=Date.now()+45000;while(Number(get('metric-progress').replace('%',''))<=35&&Date.now()<earlyDeadline){if(get('next-title')==='Inspection hold.')click('next-action');await sleep(150);}
   await until(()=>Number(get('metric-progress').replace('%',''))>35);click('map-return');click('mobilize-campus');await sleep(400);
   result('Switching to map preserves progress and resumes paused',get('run-project')==='Run project'&&Number(get('metric-progress').replace('%',''))>35);
   click('run-project');const deadline=Date.now()+55000;
   while(el('completion').hidden&&Date.now()<deadline){if(get('next-title')==='Inspection hold.')click('next-action');await sleep(150);}
   result('Entire project reaches accepted handover',!el('completion').hidden&&get('metric-progress')==='100%');
-  result('All 24 work packages accepted',doc().querySelectorAll('[data-status="Complete"]').length===24);
+  result('All 44 work packages accepted',doc().querySelectorAll('[data-status="Complete"]').length===44);
   await until(()=>Number(el('campus-canvas').dataset.drawCalls)>0);
   result('3D scene remains available',el('scene-error').hidden&&el('campus-canvas').width>0);
   click('map-return');doc().querySelector('[data-destination="starbase"]').click();click('mobilize-campus');await sleep(350);

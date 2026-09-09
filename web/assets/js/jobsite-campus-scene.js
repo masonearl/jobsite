@@ -101,13 +101,15 @@ export class CampusScene {
         }
         this.halls = ['a', 'b'].map((key, i) => this.buildHall(key, i ? 30 : -28, p.type));
         this.power = this.group(this.root, -41, 0, -38); this.cooling = this.group(this.root, 32, 0, -38);
+        this.plantPads={power:this.group(this.root,-41,0,-38),cooling:this.group(this.root,32,0,-38)};
         for (let i = 0; i < 6; i++) {
             const x = (i % 3) * 7, z = Math.floor(i / 3) * 8;
-            this.box([5, .5, 5], [x, .25, z], 0xbebbb1, this.power);
-            this.box([3.3, 3.3, 3.5], [x, 2, z], 0x7c8e8c, this.power, .5);
-            for (let j = 0; j < 3; j++) this.cyl(.22, 1.1, [x - 1 + j, 4, z], 0x605c55, this.power);
-            this.box([5, 2.5, 5], [x, 1.5, z], 0xc3c9c6, this.cooling, .4);
-            for (const dx of [-1.3, 1.3]) { this.cyl(.95, .18, [x + dx, 2.85, z], 0x343e40, this.cooling, 20); this.box([1.8, .1, .12], [x + dx, 2.98, z], 0x819190, this.cooling); }
+            for(const key of ['power','cooling'])this.box([5,.5,5],[x,.25,z],0xbebbb1,this.plantPads[key]);
+            const gear=this.group(this.power,x,0,z),cooler=this.group(this.cooling,x,0,z);
+            this.box([3.3, 3.3, 3.5], [0, 2, 0], 0x7c8e8c, gear, .5);
+            for (let j = 0; j < 3; j++) this.cyl(.22, 1.1, [-1+j, 4, 0], 0x605c55, gear);
+            this.box([5, 2.5, 5], [0, 1.5, 0], 0xc3c9c6, cooler, .4);
+            for (const dx of [-1.3, 1.3]) { this.cyl(.95, .18, [dx, 2.85, 0], 0x343e40, cooler, 20); this.box([1.8, .1, .12], [dx, 2.98, 0], 0x819190, cooler); }
         }
         this.cranes = Array.from({ length: 3 }, () => this.buildCrane());
         this.activity = new CampusActivity(this, state);
@@ -126,6 +128,13 @@ export class CampusScene {
         for (let i = 0; i < 10; i++) this.box([43, .6, 4.75], [0, .25, -22 + i * 4.8], 0xbfbfb5, slab);
         const foundation = this.group(g);
         for (const z of [-20, -10, 0, 10, 20]) for (const px of [-18, 18]) this.box([3, .6, 3], [px, .35, z], 0xc6c4b8, foundation);
+        const bases=this.group(g),forms=this.group(g),rebar=this.group(g);
+        for(const z of [-20,-10,0,10,20])for(const px of [-18,18]){
+            this.box([4.4,.08,4.4],[px,-.8,z],0xa99576,bases);
+            const form=this.group(forms,px,0,z),cage=this.group(rebar,px,0,z);
+            for(const edge of [-1.7,1.7]){this.box([3.6,.7,.12],[0,.05,edge],0x907353,form);this.box([.12,.7,3.6],[edge,.05,0],0x907353,form);}
+            for(const edge of [-1,-.5,0,.5,1]){this.box([2.8,.07,.07],[0,.15,edge],0x4d4540,cage,.7);this.box([.07,.07,2.8],[edge,.23,0],0x4d4540,cage,.7);}
+        }
         const frame = this.group(g), envelope = this.group(g), roof = this.group(g), fitout = this.group(g), mep = this.group(g);
         if (type === 'space' && key === 'a') {
             for (let y = 0; y < 52; y += 6.5) {
@@ -153,7 +162,7 @@ export class CampusScene {
             for (const z of [-17, 0, 17]) this.box([37, .4, .7], [0, height - 2, z], 0x74a3a2, mep, .4);
             for (const px of [-15, 15]) this.box([.6, .5, 43], [px, height - 2, 0], 0xc0a86a, mep, .4);
         }
-        return { key, g, slab, foundation, frame, envelope, roof, fitout, mep };
+        return { key, g, slab, foundation, bases, forms, rebar, frame, envelope, roof, fitout, mep };
     }
     buildCrane() {
         const g = this.group(), upper = this.group(g, 0, 2, 0);
@@ -201,6 +210,7 @@ export class CampusScene {
         const { active } = C.allocation(s);
         for (const h of this.halls) {
             const foundation = val(h.key + '-slab'), poured = clamp((foundation - .25) / .75);
+            this.showParts(h.bases,val(h.key+'-prep'));this.showParts(h.forms,val(h.key+'-rebar'));this.showParts(h.rebar,val(h.key+'-rebar'));h.forms.visible=h.forms.visible&&!C.done(s,h.key+'-strength');h.rebar.children.forEach((c,i)=>{c.visible=c.visible&&foundation*40<=i;});
             this.showParts(h.foundation, clamp(foundation / .25));
             h.slab.children.forEach((strip, i) => { const f = clamp(poured * 10 - i); strip.visible = f > 0; strip.scale.x = Math.max(.001, f); strip.position.x = -21.5 + 21.5 * f; });
             this.showParts(h.frame, val(h.key + '-frame'));
@@ -212,6 +222,7 @@ export class CampusScene {
             this.showParts(h.fitout, val(h.key + '-fitout'));
             this.showParts(h.mep, Math.max(val(h.key + '-mep'), val(h.key + '-electric')));
         }
+        for(const key of ['power','cooling'])this.showParts(this.plantPads[key],val(key+'-pad'));
         this.showParts(this.power, val('power')); this.showParts(this.cooling, val('cooling'));
         this.activity.update(s, dt, active);
         const lifting = active.filter(t => t.equipment === 'crane');

@@ -21,6 +21,7 @@ function save() {
             state.running = false; storageBlocked = true;
             notice('Another tab changed this project save. This tab is paused to preserve both attempts. Download your project record before reloading.'); return;
         }
+        if(state.migratedFrom===1 && existing && JSON.parse(existing).version===1){localStorage.setItem(key+':before-process-update',existing);}
         const raw = JSON.stringify(state); localStorage.setItem(key, raw); knownSaves.set(state.site, raw); dirty = false;
         text('storage-status', 'Saved on this device. Reload returns paused.');
     } catch (_) { text('storage-status', 'Device storage is unavailable. Download a project record before leaving.'); }
@@ -90,12 +91,13 @@ $('operations-close').addEventListener('click', () => openOperations(false));
 const taskRows = new Map(), resourceRows = new Map(), deliveryRows = new Map();
 function buildBoard() {
     taskRows.clear(); resourceRows.clear(); deliveryRows.clear(); $('work-packages').replaceChildren();
-    const tasks = C.plan(state.site), groups = [ ['Civil works', tasks.filter(t => !/^[ab]-/.test(t.id) && ['survey', 'clear', 'grade', 'drain', 'duct', 'formation'].includes(t.id))], ['Building work fronts', tasks.filter(t => /^[ab]-/.test(t.id))], ['Infrastructure + turnover', tasks.filter(t => !/^[ab]-/.test(t.id) && !['survey', 'clear', 'grade', 'drain', 'duct', 'formation'].includes(t.id))] ];
+    const tasks = C.plan(state.site), civil=['survey','controls','clear','grade','drain','duct','utility-test','formation'], groups = [ ['Civil works',tasks.filter(t=>civil.includes(t.id))], ['Building work fronts',tasks.filter(t=>/^[ab]-/.test(t.id))], ['Infrastructure + turnover',tasks.filter(t=>!civil.includes(t.id)&&!/^[ab]-/.test(t.id))] ];
     for (const [label, members] of groups) {
         const group = document.createElement('section'); group.className = 'work-group'; const h = document.createElement('h3'); h.textContent = label; group.append(h);
         for (const t of members) {
             const row = document.createElement('article'); row.className = 'work-row'; row.dataset.task = t.id;
-            row.innerHTML = '<div class="work-title"><strong>' + t.name + '</strong><small>' + t.quantity + '</small><details class="package-details"><summary>Sequence + scope</summary><p>' + t.lesson + '</p><p>Needs: ' + (t.deps.map(id => tasks.find(x => x.id === id).name).join('; ') || 'Released scenario design') + '.</p><p>' + C.TRADES[t.trade].name + (t.equipment ? ' / ' + C.EQUIPMENT[t.equipment].name : '') + '. ' + t.days.toFixed(1) + ' base scenario days.</p></details></div><div class="work-state"><span></span><small></small></div><div class="work-amount"><span>0%</span><div class="progress"><i></i></div></div><div class="work-actions"></div>';
+            row.innerHTML = '<div class="work-title"><strong>' + t.name + '</strong><small>' + t.quantity + '</small><details class="package-details"><summary>Sequence + scope</summary><p>' + t.lesson + '</p><p>Needs: ' + (t.deps.map(id => tasks.find(x => x.id === id).name).join('; ') || 'Released scenario design') + '.</p><p>' + (t.elapsed ? 'Elapsed time / no crew assigned' : C.TRADES[t.trade].name) + (t.equipment ? ' / ' + C.EQUIPMENT[t.equipment].name : '') + '. ' + t.days.toFixed(1) + ' base scenario days.</p></details></div><div class="work-state"><span></span><small></small></div><div class="work-amount"><span>0%</span><div class="progress"><i></i></div></div><div class="work-actions"></div>';
+            for(const key of t.sources||[]){const source=C.PROCESS_SOURCES[key],link=document.createElement('a');link.href=source.url;link.textContent=source.title;link.target='_blank';link.rel='noopener';link.className='process-source';row.querySelector('.package-details').append(link);}
             const action = makeButton('Dispatch', () => {
                 const ts = state.tasks[t.id];
                 if (ts.progress >= 1 && t.gate) C.inspect(state, t.id); else C.dispatch(state, t.id, !ts.enabled);
@@ -157,6 +159,7 @@ function desk(allocation) {
     else if (!tasks.some(t => state.tasks[t.id].enabled && !state.tasks[t.id].accepted)) { title = 'Mobilize the crews.'; copy = 'Dispatch the work packages once. The crews will take each assignment when its prerequisites are ready.'; button = 'Dispatch all crews'; action = () => C.dispatch(state, 'all', true); }
     else if (Object.values(state.orders).some(o => !o.ordered)) { title = 'Buy ahead of the build.'; copy = 'Steel, switchgear, cooling and fit-out packages have delivery lead times. Order early while the sitework advances.'; button = 'Order all packages / ' + money(Object.entries(C.MATERIALS).reduce((n, [k, m]) => n + (state.orders[k].ordered ? 0 : m.quantity * m.cost), 0)); action = () => Object.keys(C.MATERIALS).forEach(k => C.order(state, k)); }
     else if (!state.running) { title = 'Project paused.'; copy = 'Assignments and deliveries are saved. Resume the clock when you are ready to continue.'; button = 'Run project'; action = () => { state.running = true; }; }
+    else if (!allocation.active.length && allocation.passive.length) { title='Concrete is curing.';copy=allocation.passive.map(t=>t.name).join('. ')+'. The clock continues without assigning a crew or pump. Strength evidence must still be reviewed before loading.';button='Review work packages';action=()=>setTab('work'); }
     else if (!allocation.active.length) { title = 'The next handoff is waiting.'; copy = Object.values(allocation.reasons).find(r => !['Complete', 'Not dispatched'].includes(r)) || 'Dispatch unfinished work to continue.'; button = 'Review work packages'; action = () => { setTab('work'); $('tab-work').scrollIntoView({ behavior: 'smooth', block: 'start' }); }; }
     else { title = allocation.active.length + ' work fronts moving.'; copy = allocation.active.map(t => t.name).join('. ') + '. Open Operations to review waiting reasons before adding resources.'; button = 'Manage labor + equipment'; action = () => { setTab('resources'); $('tab-resources').scrollIntoView({ behavior: 'smooth', block: 'start' }); }; }
     text('next-title', title); text('next-copy', copy); text('next-action', button); nextAction = action;
@@ -172,11 +175,11 @@ function hud() {
     const w = C.weather(state); text('weather-label', w.name); text('weather-next', 'Scenario weather changes in ' + w.ends.toFixed(1) + ' days.');
     for (const t of C.plan(state.site)) {
         const ts = state.tasks[t.id], r = taskRows.get(t.id), status = a.reasons[t.id]; r.row.dataset.status = status;
-        r.row.querySelector('.work-state span').textContent = status === 'Working' && !state.running ? 'Ready / project paused' : status;
-        r.row.querySelector('.work-state small').textContent = ts.start !== null ? 'Started day ' + Math.floor(ts.start) + (ts.finish !== null ? ' / accepted day ' + Math.ceil(ts.finish) : '') : C.TRADES[t.trade].people + ' people / ' + (t.equipment ? C.EQUIPMENT[t.equipment].name : 'Field team');
+        r.row.querySelector('.work-state span').textContent = status === 'Working' ? (state.running ? (t.reachWork?C.workPhase(state,t).label:'Working') : 'Ready / project paused') : status==='Curing / test wait' ? (state.running ? status : 'Curing clock paused') : status;
+        r.row.querySelector('.work-state small').textContent = ts.start !== null ? 'Started day ' + Math.floor(ts.start) + (ts.finish !== null ? ' / accepted day ' + Math.ceil(ts.finish) : '') : (t.elapsed ? 'No crew assigned / elapsed time' : C.TRADES[C.workPhase(state,t).trade||t.trade].people + ' people') + ' / ' + (t.equipment ? C.EQUIPMENT[t.equipment].name : 'Field team');
         r.row.querySelector('.work-amount span').textContent = Math.floor(ts.progress * 100) + '%'; r.row.querySelector('.progress i').style.width = ts.progress * 100 + '%';
-        const label = ts.accepted ? 'Accepted' : ts.progress === 1 && t.gate ? 'Accept' : ts.enabled ? 'Hold' : 'Dispatch'; r.action.textContent = label; r.action.setAttribute('aria-label', label + ' ' + t.name); r.action.disabled = ts.accepted;
-        r.priority.setAttribute('aria-pressed', !!ts.priority); r.priority.disabled = ts.progress === 1;
+        const label = ts.accepted ? 'Accepted' : ts.progress === 1 && t.gate ? 'Accept' : ts.enabled ? 'Hold' : 'Dispatch'; r.action.textContent = label; r.action.setAttribute('aria-label', label + ' ' + t.name); r.action.disabled = ts.accepted || t.elapsed; if(t.elapsed&&!ts.accepted){r.action.textContent='Automatic';r.action.setAttribute('aria-label','Automatic '+t.name);}
+        r.priority.setAttribute('aria-pressed', !!ts.priority); r.priority.disabled = ts.progress === 1 || t.elapsed;
     }
     for (const r of resourceRows.values()) {
         const count = state[r.group][r.key], active = count - (r.group === 'crews' ? a.labor[r.key] : a.equipment[r.key]); r.amount.textContent = count + (r.group === 'crews' ? ' crew' + (count > 1 ? 's' : '') : ' spread' + (count > 1 ? 's' : ''));
@@ -188,13 +191,14 @@ function hud() {
         r.order.disabled = o.ordered || state.complete; r.order.textContent = o.ordered ? 'Ordered' : 'Order'; r.expedite.disabled = !o.ordered || o.expedited || o.arrival <= state.day || state.complete;
     }
     $('order-all').disabled = Object.values(state.orders).every(o => o.ordered) || state.complete;
-    const milestones = [['Site released', ['survey']], ['Formation accepted', ['formation']], ['Structures erected', ['a-frame', 'b-frame']], ['Buildings + plant complete', ['a-fitout', 'b-fitout', 'power', 'cooling']], ['Systems commissioned', ['test']], ['Owner handover', ['handover']]];
+    const milestones = [['Site access + controls', ['controls']], ['Formation accepted', ['formation']], ['Structures erected', ['a-frame', 'b-frame']], ['Buildings + plant complete', ['a-fitout', 'b-fitout', 'power', 'cooling']], ['Startup verified', ['startup']], ['Functional tests passed', ['functional']], ['Systems commissioned', ['test']], ['Owner handover', ['handover']]];
     $('milestones').replaceChildren(); let current = false;
     for (const [name, ids] of milestones) { const li = document.createElement('li'), complete = ids.every(id => C.done(state, id)); li.textContent = name; li.className = complete ? 'done' : current ? '' : 'current'; if (!complete) current = true; $('milestones').append(li); }
     if (scene?.activity) { text('scene-activity', state.running ? scene.activity.title + ' / ' + scene.activity.detail : 'Project paused / equipment and crews stopped'); text('site-attendance', scene.activity.workerCount + ' people on site / ' + scene.activity.parkedCount + ' vehicles parked'); }
     desk(a); $('completion').hidden = !state.complete;
     const report = C.report(state);
     text('completion-report', 'Score ' + report.score + '/100. ' + report.days + ' scenario days / ' + money(report.cost) + ' / ' + report.laborHours.toLocaleString() + ' productive labor hours. ' + (report.onTime ? 'Within schedule target.' : 'Beyond schedule target.') + ' ' + (report.onBudget ? 'Within cost allowance.' : 'Beyond cost allowance.'));
+    text('process-save-note',state.migratedFrom===1?'Earlier progress retained. '+state.legacyCredits.length+' newly separated prerequisites received legacy credit; remaining work follows the updated sequence. Saving this upgrade requires a device backup of the original save.':'Process model 2 / 44 work packages. Durations, crew sizes and acceptance outcomes are illustrative.');
     text('project-record-metrics', Math.round(state.laborHours).toLocaleString() + ' productive labor hours / ' + state.peakWorkers + ' peak working people / ' + state.idleDays.toFixed(1) + ' days with no productive work.');
     $('project-log').replaceChildren(); for (const entry of state.log) { const li = document.createElement('li'); li.textContent = 'Day ' + Math.floor(entry.day) + ': ' + entry.message; $('project-log').append(li); }
     $('dispatch-all').disabled = $('hold-all').disabled = state.complete;
@@ -237,3 +241,5 @@ function loop(now) {
 choose(selected.id); document.body.dataset.campusReady = 'true'; loadWorld();
 if (location.hash === '#how-to-play') $('field-guide').showModal();
 requestAnimationFrame(loop);
+
+for(const source of Object.values(C.PROCESS_SOURCES)){const a=document.createElement('a');a.href=source.url;a.textContent=source.title;a.target='_blank';a.rel='noopener';a.className='process-source';$('process-sources').append(a);}
