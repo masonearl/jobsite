@@ -43,7 +43,7 @@ function choose(id) {
     text('destination-name', selected.name); text('destination-place', selected.place); text('destination-status', selected.status); text('destination-fact', selected.fact);
     text('destination-source', selected.source); $('destination-source').href = selected.url; text('destination-date', selected.date);
     text('destination-type', { data: 'Data-center construction', fab: 'Semiconductor fabrication campus', space: 'Launch-site civil works' }[selected.type]);
-    $('destination-image').style.backgroundImage = 'linear-gradient(0deg, #15232955, transparent), url(/assets/jobsite/' + (selected.biome === 'coast' ? 'desert' : selected.biome) + '.jpg)';
+    $('destination-image').style.backgroundImage = 'linear-gradient(0deg, #15120f55, transparent), url(/assets/jobsite/' + (selected.biome === 'coast' ? 'desert' : selected.biome) + '.jpg)';
     text('destination-scope', selected.type === 'space' ? 'Pad, tower, integration building + support yards' : selected.type === 'fab' ? 'Process fab, packaging hall + central plant' : 'Two data halls + power and cooling yards');
     text('destination-challenge', selected.climate + '. Target: ' + selected.target + ' scenario days.');
     const saved = readSave(id);

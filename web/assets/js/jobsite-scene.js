@@ -90,8 +90,8 @@ export class JobsiteScene {
     }
     label(value, width = 256) {
         const c = document.createElement('canvas'); c.width = width; c.height = 64;
-        const x = c.getContext('2d'); x.fillStyle = '#202a24'; x.fillRect(0, 0, width, 64);
-        x.fillStyle = '#eee3bb'; x.font = 'bold 32px Arial'; x.textAlign = 'center'; x.fillText(value, width / 2, 44);
+        const x = c.getContext('2d'); x.fillStyle = '#1d1914'; x.fillRect(0, 0, width, 64);
+        x.fillStyle = '#efe8dd'; x.font = 'bold 32px Arial'; x.textAlign = 'center'; x.fillText(value, width / 2, 44);
         const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
     }
     crewLabel(parent, role, height) {
