@@ -135,7 +135,7 @@ async function mobilize() {
     buildBoard(); openOperations(false, false); hud(); window.scrollTo({ top: 0 }); $('run-project').focus();
     try {
         if (!scene) { const { CampusScene } = await import('./jobsite-campus-scene.js'); scene = new CampusScene($('campus-canvas'), () => { pause(); $('scene-error').hidden = false; }); }
-        scene.configure(state); document.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === 'site')); $('scene-error').hidden = true;
+        scene.configure(state); scene.setCamera('work'); document.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === 'work')); $('scene-error').hidden = true;
     } catch (_) { $('scene-error').hidden = false; }
     dirty = true; save();
 }
@@ -190,6 +190,7 @@ function hud() {
     const milestones = [['Site released', ['survey']], ['Formation accepted', ['formation']], ['Structures erected', ['a-frame', 'b-frame']], ['Buildings + plant complete', ['a-fitout', 'b-fitout', 'power', 'cooling']], ['Systems commissioned', ['test']], ['Owner handover', ['handover']]];
     $('milestones').replaceChildren(); let current = false;
     for (const [name, ids] of milestones) { const li = document.createElement('li'), complete = ids.every(id => C.done(state, id)); li.textContent = name; li.className = complete ? 'done' : current ? '' : 'current'; if (!complete) current = true; $('milestones').append(li); }
+    if (scene?.activity) { text('scene-activity', state.running ? scene.activity.title + ' / ' + scene.activity.detail : 'Project paused / equipment and crews stopped'); text('site-attendance', scene.activity.workerCount + ' people on site / ' + scene.activity.parkedCount + ' vehicles parked'); }
     desk(a); $('completion').hidden = !state.complete;
     const report = C.report(state);
     text('completion-report', 'Score ' + report.score + '/100. ' + report.days + ' scenario days / ' + money(report.cost) + ' / ' + report.laborHours.toLocaleString() + ' productive labor hours. ' + (report.onTime ? 'Within schedule target.' : 'Beyond schedule target.') + ' ' + (report.onBudget ? 'Within cost allowance.' : 'Beyond cost allowance.'));
@@ -198,6 +199,8 @@ function hud() {
     $('dispatch-all').disabled = $('hold-all').disabled = state.complete;
 }
 document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => { scene?.setCamera(b.dataset.view); document.querySelectorAll('[data-view]').forEach(x => x.setAttribute('aria-pressed', x === b)); }));
+$('next-crew').addEventListener('click', () => { if (!scene?.activity) return; scene.activity.workIndex++; scene.setCamera('work'); document.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === 'work')); });
+$('campus-canvas').addEventListener('campuscamera', () => document.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', 'false')));
 $('cutaway').addEventListener('click', () => { if (!scene) return; scene.cutaway = !scene.cutaway; $('cutaway').setAttribute('aria-pressed', scene.cutaway); text('cutaway', scene.cutaway ? 'Roof on' : 'Roof off'); });
 $('guide-open').addEventListener('click', () => { pause(); $('field-guide').showModal(); }); $('guide-close').addEventListener('click', () => $('field-guide').close());
 $('fullscreen').addEventListener('click', async () => {
@@ -223,7 +226,7 @@ function loop(now) {
     const dt = Math.min(.1, (now - (last || now)) / 1000); last = now;
     if (onMap && !document.hidden && !$('field-guide').open && now - renderTime > 33) { world?.render(Math.min(.1, (now - renderTime) / 1000)); renderTime = now; }
     if (!onMap && state) {
-        if (state.running && !$('field-guide').open) { C.advance(state, dt / 3 * state.speed); dirty = true; }
+        if (state.running && !$('field-guide').open) { C.advance(state, dt / 12 * state.speed); dirty = true; }
         if (now - hudTime > 250) { hud(); hudTime = now; }
         if (!document.hidden && !$('field-guide').open && now - renderTime > 33) { scene?.render(state, Math.min(.1, (now - renderTime) / 1000)); renderTime = now; }
         if (now - saveTime > 2000) { save(); saveTime = now; }

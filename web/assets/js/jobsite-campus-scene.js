@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { CampusActivity } from './jobsite-campus-actors.js';
+import { clamp, cycle, mix, smooth, workLocation } from './jobsite-campus-activity.mjs';
 import { OrbitControls } from '../vendor/three/OrbitControls.js';
 
 const C = window.JobsiteCampus;
@@ -17,6 +19,7 @@ export class CampusScene {
         this.controls.enableDamping = true; this.controls.minDistance = 35; this.controls.maxDistance = 300;
         this.controls.maxPolarAngle = Math.PI / 2 - .05;
         this.controls.target.set(0, 2, 0);
+        this.controls.addEventListener('start', () => { this.followWork = false; this.canvas.dispatchEvent(new CustomEvent('campuscamera', { detail: 'free' })); });
         this.observer = new ResizeObserver(() => this.resize()); this.observer.observe(canvas.parentElement);
         canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); failure(); });
         this.cutaway = false; this.clock = 0; this.cache = new Map();
@@ -53,6 +56,9 @@ export class CampusScene {
         m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), vb.sub(va).normalize()); return m;
     }
     setCamera(name) {
+        this.followWork = name === 'work';
+        if (this.followWork) return;
+        if (name === 'parking') { this.camera.position.set(4, 35, 129); this.controls.target.set(-37, 0, 82); this.controls.update(); return; }
         this.camera.position.set(...({ site: [122, 104, 148], overhead: [0, 200, 1], detail: [67, 34, 52] }[name] || [122, 104, 148]));
         this.controls.target.set(0, 2, 0); this.controls.update();
     }
@@ -63,15 +69,15 @@ export class CampusScene {
     }
     configure(state) {
         const token = ++this.assetToken;
+        this.activity?.dispose();
         if (this.root) { this.root.traverse(o => { o.geometry?.dispose(); }); this.scene.remove(this.root); }
         this.state = state; this.root = new THREE.Group(); this.scene.add(this.root);
         const p = C.site(state.site), coast = p.biome === 'coast', desert = p.biome === 'desert';
         this.scene.background = new THREE.Color(coast ? 0xbad5db : 0xc0d0d9); this.scene.fog = new THREE.Fog(this.scene.background, 270, 750);
-        this.box([1500, 1, 1500], [0, -1.4, 0], 0x868975).material = this.surroundMaterial;
+        for (const z of [-405.5, 405.5]) this.box([1500, 1, 689], [0, -.6, z], 0x868975).material = this.surroundMaterial;
+        for (const x of [-413.5, 413.5]) this.box([673, 1, 122], [x, -.6, 0], 0x868975).material = this.surroundMaterial;
         this.surroundMaterial.color.setHex(desert ? 0xb3a58b : coast ? 0x939c8b : 0x939884);
-        this.box([154, .45, 122], [0, -.4, 0], 0x9e8d6e).material = this.groundMaterial;
-        this.graded = this.box([143, .12, 112], [0, -.12, 0], 0xb4a389);
-        this.graded.material = this.groundMaterial;
+        this.box([154, 1, 122], [0, -2.6, 0], 0x9e8d6e).material = this.groundMaterial;
         if (coast) {
             const water = this.shape(new THREE.PlaneGeometry(900, 1500), 0x6aadb6, [-600, -.5, 0], this.root, .25);
             water.rotation.x = -Math.PI / 2; water.castShadow = false;
@@ -86,20 +92,14 @@ export class CampusScene {
             }
         }
         // A haul loop stays clear of the buildings; finished paving replaces its base course.
-        this.roads = this.group();
-        for (const z of [-53, 53]) this.box([145, .14, 7], [0, .03, z], 0x4f5555, this.roads);
-        for (const x of [-69, 69]) this.box([7, .14, 106], [x, .03, 0], 0x4f5555, this.roads);
-        for (let x = -60; x <= 60; x += 9) for (const z of [-53, 53]) this.box([3, .02, .12], [x, .12, z], 0xd9cda8, this.roads);
-        for (let x = -75; x <= 75; x += 6) for (const z of [-60, 60]) this.box([.14, 2, .14], [x, .8, z], 0x697675);
-        for (const z of [-60, 60]) for (const y of [.3, 1.5]) this.box([150, .07, .07], [0, y, z], 0x899391);
+        for (let x = -75; x <= 75; x += 6) for (const z of [-60, 60]) if (z < 0 || x < -53 || x > -43) this.box([.14, 2, .14], [x, .8, z], 0x697675);
+        for (const y of [.3, 1.5]) { this.box([150, .07, .07], [0, y, -60], 0x899391); this.box([22, .07, .07], [-64, y, 60], 0x899391); this.box([107, .07, .07], [10.5, y, 60], 0x899391); }
         for (let i = 0; i < 3; i++) {
             const g = this.group(this.root, -48 + i * 13, 0, 40);
             this.box([10, 3, 4], [0, 1.5, 0], 0xc7c4b7, g); this.box([10.3, .2, 4.3], [0, 3.1, 0], 0xe0ddd0, g);
             for (const x of [-3, 0, 3]) this.box([1.4, 1, .1], [x, 1.9, 2.05], 0x355760, g);
         }
         this.halls = ['a', 'b'].map((key, i) => this.buildHall(key, i ? 30 : -28, p.type));
-        this.utility = this.group();
-        this.pipePieces = Array.from({ length: 24 }, (_, i) => this.box([4.6, .3, 1.2], [-57 + i * 5, .13, 30], 0x476d70, this.utility));
         this.power = this.group(this.root, -41, 0, -38); this.cooling = this.group(this.root, 32, 0, -38);
         for (let i = 0; i < 6; i++) {
             const x = (i % 3) * 7, z = Math.floor(i / 3) * 8;
@@ -110,12 +110,7 @@ export class CampusScene {
             for (const dx of [-1.3, 1.3]) { this.cyl(.95, .18, [x + dx, 2.85, z], 0x343e40, this.cooling, 20); this.box([1.8, .1, .12], [x + dx, 2.98, z], 0x819190, this.cooling); }
         }
         this.cranes = Array.from({ length: 3 }, () => this.buildCrane());
-        this.movers = Array.from({ length: 8 }, (_, i) => this.buildVehicle(i < 2 ? 'excavator' : i < 4 ? 'dozer' : 'truck'));
-        this.workers = Array.from({ length: 72 }, (_, i) => {
-            const g = this.group(); this.box([.4, .65, .28], [0, 1, 0], i % 3 ? 0xe7a83b : 0xe9e373, g);
-            this.cyl(.18, .28, [0, 1.56, 0], 0xd4b292, g); this.cyl(.23, .1, [0, 1.73, 0], 0xf1e2b1, g);
-            for (const x of [-.12, .12]) this.box([.14, .65, .17], [x, .35, 0], 0x334953, g); return g;
-        });
+        this.activity = new CampusActivity(this, state);
         this.setCamera('site'); this.resize(); this.render(state, 0);
         this.textureLoader.load('/assets/jobsite/' + (coast ? 'desert' : p.biome) + '.jpg', texture => {
             if (token !== this.assetToken) { texture.dispose(); return; }
@@ -127,7 +122,8 @@ export class CampusScene {
     }
     buildHall(key, x, type) {
         const g = this.group(this.root, x, 0, -3), height = type === 'space' ? key === 'a' ? 52 : 24 : type === 'fab' ? 14 : 10;
-        const slab = this.box([43, .6, 49], [0, .25, 0], 0xbfbfb5, g);
+        const slab = this.group(g);
+        for (let i = 0; i < 10; i++) this.box([43, .6, 4.75], [0, .25, -22 + i * 4.8], 0xbfbfb5, slab);
         const foundation = this.group(g);
         for (const z of [-20, -10, 0, 10, 20]) for (const px of [-18, 18]) this.box([3, .6, 3], [px, .35, z], 0xc6c4b8, foundation);
         const frame = this.group(g), envelope = this.group(g), roof = this.group(g), fitout = this.group(g), mep = this.group(g);
@@ -142,10 +138,10 @@ export class CampusScene {
             for (const z of [-16, 16]) this.box([30, .4, 2], [0, 2, z], 0x9ca5a2, envelope);
         } else {
             for (const z of [-22, -11, 0, 11, 22]) {
-                const bay = this.group(frame);
-                for (const px of [-20, 20]) this.box([.6, height, .6], [px, height / 2, z], 0x72858a, bay, .6);
-                this.box([40, .65, .45], [0, height, z], 0x879a9b, bay, .6);
-                for (let px = -20; px < 20; px += 8) this.beam([px, height, z], [px + 4, height - 2, z], .16, 0xa3b2b0, bay);
+                for (const px of [-20, 20]) { const column = this.group(frame, px, height / 2, z); this.box([.6, height, .6], [0, 0, 0], 0x72858a, column, .6); }
+                const rafter = this.group(frame, 0, height, z);
+                this.box([40, .65, .45], [0, 0, 0], 0x879a9b, rafter, .6);
+                for (let px = -20; px < 20; px += 8) this.beam([px, 0, 0], [px + 4, -2, 0], .16, 0xa3b2b0, rafter);
             }
             for (const z of [-22, 22]) this.box([41, height, .3], [0, height / 2, z], 0xc0c9c9, envelope, .2);
             for (const px of [-20, 20]) this.box([.3, height, 44], [px, height / 2, 0], 0xa7b4b8, envelope, .2);
@@ -161,70 +157,74 @@ export class CampusScene {
     }
     buildCrane() {
         const g = this.group(), upper = this.group(g, 0, 2, 0);
-        this.box([4, 1.5, 7], [0, .8, 0], 0x444c4d, g); this.box([5, 1.4, 4], [0, .6, 0], 0x424846, g);
-        this.box([3, 2, 4], [0, 1, 0], 0xd7ab4a, upper);
-        this.beam([0, 2, 0], [0, 38, -15], .9, 0xd8b35b, upper);
-        this.beam([0, 38, -15], [0, 5, -15], .07, 0x40494a, upper);
-        this.box([1, .7, 1], [0, 5, -15], 0xc9a24d, upper);
-        return { g, upper };
+        for (const x of [-2, 2]) this.box([.9, 1.1, 7], [x, .6, 0], 0x414947, g);
+        this.box([3.5, 1.3, 5], [0, 1.2, 0], 0xd7ab4a, g);
+        this.box([2, 1.7, 2.4], [1, 1.6, -1], 0xa7bbb9, upper);
+        this.box([1.8, 1, .1], [1, 1.8, -2.25], 0x34545e, upper);
+        this.box([3.5, 2, 2.4], [0, 1.1, 2], 0xd7ab4a, upper);
+        const boom = this.box([.65, .65, 1], [0, 0, 0], 0xd8b35b, this.root);
+        const cable = this.box([.06, .06, 1], [0, 0, 0], 0x333c40, this.root);
+        const hook = this.box([.5, .65, .45], [0, 0, 0], 0xc9a24d, this.root);
+        const payload = this.group(this.root);
+        return { g, upper, boom, cable, hook, payload, payloadKey: null };
     }
-    buildVehicle(kind) {
-        const g = this.group(), body = this.group(g);
-        this.box([2.8, .8, 4.5], [0, .7, 0], 0x414746, body);
-        this.box([2.5, 1.3, 3.6], [0, 1.7, 0], 0xd8ad50, body);
-        this.box([1.6, 1.6, 1.7], [.4, 2.7, -.6], 0xb7c7c6, body);
-        this.box([1.45, .85, .07], [.4, 2.9, -1.48], 0x355760, body);
-        const arm = this.group(body, -1, 2, -1);
-        if (kind === 'excavator') { this.beam([0, 0, 0], [0, 4, -3], .45, 0xd9ae4f, arm); this.beam([0, 4, -3], [0, 0, -6], .3, 0xe0b956, arm); this.box([1.4, .8, 1.3], [0, -.3, -6], 0x555f5b, arm); }
-        if (kind === 'dozer') this.box([4, 1.5, .55], [0, .8, -3], 0xdcc17c, body);
-        if (kind === 'truck') { this.box([3, 1.5, 4.6], [0, 2, 2.5], 0xc3bca5, body); this.box([2.6, .2, 4.2], [0, 2.8, 2.5], 0x968260, body); }
-        for (const x of [-1.5, 1.5]) for (const z of [-1.4, 1.4]) { const tire = this.cyl(.65, .45, [x, .6, z], 0x343b3c, body); tire.rotation.z = Math.PI / 2; }
-        return { g, body, arm, kind };
+    updateCrane(crane, task, state, index) {
+        const active = !!task;
+        [crane.g, crane.boom, crane.cable, crane.hook].forEach(o => o.visible = index < state.equipment.crane);
+        crane.payload.visible = active;
+        const p = task ? state.tasks[task.id].progress : 0;
+        const hall = task && this.halls.find(h => task.id === h.key + '-frame');
+        const group = hall ? hall.frame : task?.id === 'power' ? this.power : task?.id === 'cooling' ? this.cooling : null;
+        const c = cycle(p, group?.children.length || 1), part = group?.children[c.index];
+        const base = hall ? [hall.g.position.x + 26, 0, hall.g.position.z + (part?.position.z || 0)] : task?.zone === 'power' ? [-14, 0, -35] : task?.zone === 'cooling' ? [57, 0, -35] : [60,0,35-index*10];
+        crane.g.position.set(...base);
+        let target = [base[0]-7, 1, base[2]-5], loadPosition = target;
+        if (part) {
+            const parent = hall ? hall.g.position : group.position;
+            target = [part.position.x+parent.x, part.position.y+parent.y, part.position.z+parent.z];
+            const key = task.id + ':' + c.index;
+            if (crane.payloadKey !== key) { crane.payload.clear(); const load = part.clone(); load.position.set(0,0,0); load.visible = true; const bounds=new THREE.Box3().setFromObject(load); crane.loadBottom=bounds.min.y;crane.loadTop=bounds.max.y;crane.payload.add(load); crane.payloadKey = key; }
+            const pickup = [base[0]+2, .3-crane.loadBottom, base[2]+8];
+            const raised = [pickup[0],target[1]+6,pickup[2]], over = [target[0],target[1]+6,target[2]];
+            loadPosition = c.phase < .22 ? pickup.map((v,i)=>mix(v,raised[i],smooth(c.phase/.22))) : c.phase < .7 ? raised.map((v,i)=>mix(v,over[i],smooth((c.phase-.22)/.48))) : over.map((v,i)=>mix(v,target[i],smooth((c.phase-.7)/.3)));
+            crane.payload.position.set(...loadPosition);
+        }
+        const top = [loadPosition[0],loadPosition[1]+(crane.loadTop||2)+6,loadPosition[2]], hook = [loadPosition[0],loadPosition[1]+(crane.loadTop||2)+.3,loadPosition[2]];
+        this.activity.setBeam(crane.boom,[base[0],4,base[2]],top);this.activity.setBeam(crane.cable,top,hook);crane.hook.position.set(...hook);
+        crane.upper.rotation.y=Math.atan2(-(top[0]-base[0]),-(top[2]-base[2]));
     }
-    showParts(group, progress) { group.children.forEach((part, i) => { part.visible = i / group.children.length < progress; }); group.visible = progress > 0; }
+    showParts(group, amount) { group.children.forEach((part, i) => { part.visible = i < Math.floor(amount * group.children.length + 1e-6); }); group.visible = amount > 0; }
     render(s, dt) {
-        if (!this.root) return;
-        if (s.running) this.clock += dt * s.speed;
-        const t = this.clock, val = key => s.tasks[key]?.progress || 0;
-        this.graded.scale.x = Math.max(.02, val('grade')); this.roads.visible = val('clear') > .25;
-        this.roads.children.forEach(m => { if (m.geometry.parameters.height > .1) m.material = this.mat(val('roads') > .5 ? 0x414a4c : 0x938c79); });
+        if (!this.root || !this.activity) return;
+        const renderStart=performance.now();
+        const val = key => s.tasks[key]?.progress || 0;
+        const { active } = C.allocation(s);
         for (const h of this.halls) {
-            h.foundation.visible = val(h.key + '-slab') > 0;
-            h.slab.visible = val(h.key + '-slab') > .35; h.slab.scale.z = Math.max(.01, val(h.key + '-slab'));
+            const foundation = val(h.key + '-slab'), poured = clamp((foundation - .25) / .75);
+            this.showParts(h.foundation, clamp(foundation / .25));
+            h.slab.children.forEach((strip, i) => { const f = clamp(poured * 10 - i); strip.visible = f > 0; strip.scale.x = Math.max(.001, f); strip.position.x = -21.5 + 21.5 * f; });
             this.showParts(h.frame, val(h.key + '-frame'));
             this.showParts(h.envelope, val(h.key + '-envelope'));
             this.showParts(h.roof, val(h.key + '-envelope'));
-            h.roof.visible = h.roof.visible && !this.cutaway;
-            h.envelope.visible = h.envelope.visible && !this.cutaway;
+            const indoor = this.followWork && active.some(t => t.zone === h.key && !t.outdoor);
+            h.roof.visible = h.roof.visible && !this.cutaway && !indoor;
+            h.envelope.visible = h.envelope.visible && !this.cutaway && !indoor;
             this.showParts(h.fitout, val(h.key + '-fitout'));
-            this.showParts(h.mep, val(h.key + '-mep'));
+            this.showParts(h.mep, Math.max(val(h.key + '-mep'), val(h.key + '-electric')));
         }
         this.showParts(this.power, val('power')); this.showParts(this.cooling, val('cooling'));
-        this.pipePieces.forEach((p, i) => { p.visible = i / 24 < val('drain'); p.material = this.mat(i / 24 < val('duct') ? 0xb1a087 : 0x49757b); });
-        const { active } = C.allocation(s), positions = { a: [-28, 0], b: [30, 0], yard: [0, 28], utilities: [0, 30], power: [-38, -37], cooling: [36, -37], access: [-44, 40] };
-        const cranes = active.filter(a => a.equipment === 'crane');
-        this.cranes.forEach((crane, i) => {
-            crane.g.visible = i < s.equipment.crane;
-            const location = cranes[i] ? positions[cranes[i].zone] : [57, 35 - i * 10];
-            crane.g.position.set(location[0] + (cranes[i] ? 21 : 0), 0, location[1]);
-            crane.upper.rotation.y = cranes[i] ? Math.sin(t * .15 + i) * .4 + 1 : 0;
-        });
-        const earth = active.some(a => a.equipment === 'earth'), utility = active.some(a => a.equipment === 'trench');
-        this.movers.forEach((m, i) => {
-            const work = earth || (i === 0 && utility), phase = work ? t * .35 + i * 4 : i * 4;
-            if (i >= 4) { const a = phase * .08; m.g.position.set(Math.sin(a) * 66, 0, Math.cos(a) * 52); m.g.rotation.y = a + Math.PI / 2; }
-            else { m.g.position.set(-52 + i * 22 + (work ? Math.sin(phase * .15) * 7 : 0), 0, i === 0 && utility ? 27 : 31); m.body.rotation.y = work ? Math.sin(phase * .3) * .6 : 0; m.arm.rotation.x = work ? Math.sin(phase) * .18 : 0; }
-        });
-        let worker = 0;
-        for (const task of active) {
-            const [x, z] = positions[task.zone], count = Math.min(C.TRADES[task.trade].people, 8);
-            for (let j = 0; j < count && worker < this.workers.length; j++, worker++) {
-                const w = this.workers[worker], angle = j * 2.4 + t * .02;
-                w.visible = true; w.position.set(x + Math.cos(angle) * (5 + j % 3 * 2), 0, z + Math.sin(angle) * (4 + j % 4 * 2)); w.rotation.y = angle;
-            }
+        this.activity.update(s, dt, active);
+        const lifting = active.filter(t => t.equipment === 'crane');
+        this.cranes.forEach((crane, i) => this.updateCrane(crane, lifting[i], s, i));
+        if (this.followWork) {
+            const target = new THREE.Vector3(...this.activity.focus).add(new THREE.Vector3(0,2,0));
+            const offset = new THREE.Vector3(34,27,42);
+            this.controls.target.lerp(target, dt ? 1-Math.exp(-dt*2.5) : 1);
+            this.camera.position.lerp(target.clone().add(offset), dt ? 1-Math.exp(-dt*2.5) : 1);
         }
-        for (; worker < this.workers.length; worker++) this.workers[worker].visible = false;
         this.controls.update(); this.renderer.render(this.scene, this.camera);
         this.canvas.dataset.drawCalls = this.renderer.info.render.calls;
+        this.canvas.dataset.cameraFollow = String(!!this.followWork);
+        this.canvas.dataset.renderMs=(performance.now()-renderStart).toFixed(1);
     }
 }

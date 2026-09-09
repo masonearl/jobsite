@@ -1,0 +1,43 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Construction activity checks</title>
+<style>body{margin:20px;background:#15120f;color:#efe8dd;font:13px system-ui}button,select{background:#241e18;color:#efe8dd;padding:10px;border:1px solid #725e49;margin-right:8px}.stage{position:relative;width:1200px;max-width:100%;height:700px}canvas{width:100%;height:100%;touch-action:none}#status{margin:16px 0}li{margin:4px 0}.pass{color:#d3b48f}.fail{color:#eb9b7e}</style>
+<script type="importmap">{"imports":{"three":"/assets/vendor/three/three.module.min.js"}}</script><script src="/assets/js/jobsite-campus.js"></script>
+<h1>Construction activity checks</h1><button id="check">Run checks</button><select id="preset" aria-label="Preview phase"><option value="7">Earthworks + trench</option><option value="18">Concrete</option><option value="22">Steel erection</option><option value="40">Fit-out</option><option value="0">Morning arrival</option></select><button id="run">Run scene</button><button id="next">Next work front</button><button id="parking">Parking</button><p id="status">Loading</p><div class="stage"><canvas id="scene"></canvas></div><ol id="results"></ol>
+<script type="module">
+import {CampusScene} from '/assets/js/jobsite-campus-scene.js';
+const C=JobsiteCampus,canvas=document.querySelector('#scene'),output=document.querySelector('#results'),status=document.querySelector('#status');
+const scene=new CampusScene(canvas,()=>status.textContent='FAIL: WebGL lost');let state,last=0,preview=false;
+const assert=(name,pass)=>{const li=document.createElement('li');li.textContent=(pass?'PASS: ':'FAIL: ')+name;li.className=pass?'pass':'fail';output.append(li);if(!pass)throw Error(name);};
+function seed(day,site='stratos'){const s=C.create(site);C.dispatch(s,'all',true);Object.keys(C.MATERIALS).forEach(k=>C.order(s,k));s.running=true;for(let i=0;i<day*10&&!s.complete;i++){C.advance(s,.1);C.plan(site).filter(t=>t.gate).forEach(t=>C.inspect(s,t.id));}s.running=false;return s;}
+function load(day,site){state=seed(day,site);scene.configure(state);scene.setCamera('work');scene.render(state,0);}
+function snap(){return JSON.stringify({clock:scene.activity.clock,truck:scene.activity.trucks[0].g.position.toArray(),boom:scene.activity.excavators[0].boom.rotation.x,people:Array.from(scene.activity.parts.leftLeg.instanceMatrix.array),terrain:canvas.dataset.terrainVersion});}
+async function checks(){
+ preview=false;output.replaceChildren();
+ try{
+  load(0);assert('Fresh mobilization starts before staff cars arrive',scene.activity.parkedCount===0&&scene.activity.workerCount===4);
+  state.running=true;C.advance(state,1.3);scene.render(state,.1);assert('Cars park before their passengers enter the pedestrian route',scene.activity.parkedCount===19&&scene.activity.walkingCount>0);
+  assert('Hired people are drawn with eight instanced parts',Object.keys(scene.activity.parts).length===8&&scene.activity.workerCount===75);
+  load(7);const before=snap(),vertices=Array.from(scene.activity.terrain.geometry.attributes.position.array);state.running=true;C.advance(state,.08);scene.render(state,.1);
+  assert('Excavator and haul truck poses change with produced work',snap()!==before&&scene.activity.trucks[0].g.visible);
+  assert('All ground crew and dozer positions are finite',Object.values(scene.activity.parts).every(mesh=>Array.from(mesh.instanceMatrix.array.slice(0,mesh.count*16)).every(Number.isFinite))&&[...scene.activity.dozers,scene.activity.roller].every(m=>m.g.position.toArray().every(Number.isFinite)));
+  assert('Cut and fill change terrain vertices at the work front',vertices.some((value,i)=>Math.abs(value-scene.activity.terrain.geometry.attributes.position.array[i])>.0001));
+  assert('Pipe crew has an open trench, bedding and shoring',scene.activity.trenchBox.visible&&scene.activity.bedding.some(b=>b.visible)&&Math.min(...scene.activity.terrain.geometry.attributes.position.array.filter((_,i)=>i%3===1))<-1.2);
+  state.running=false;scene.render(state,.1);const paused=snap();for(let i=0;i<5;i++)scene.render(state,.1);assert('Pause freezes machinery, terrain and walking poses',snap()===paused);
+  const restored=JSON.parse(JSON.stringify(state));scene.configure(restored);scene.render(restored,0);assert('Reload reconstructs the same terrain and installed pipe',canvas.dataset.terrainVersion===JSON.parse(paused).terrain&&scene.activity.pipes[0].some(p=>p.visible));
+  load(18);assert('Concrete pump and mixer are assigned to the live foundation',scene.activity.pumps[0].truck.g.visible&&scene.activity.pumps[0].boom.visible);
+  const slab=scene.halls[0].slab.children.reduce((n,p)=>n+(p.visible?p.scale.x:0),0);state.running=true;C.advance(state,.25);scene.render(state,.1);assert('Concrete placement extends the slab strip by strip',scene.halls[0].slab.children.reduce((n,p)=>n+(p.visible?p.scale.x:0),0)>slab);
+  load(22);assert('The crane has a suspended structural member',scene.cranes[0].payload.visible&&scene.cranes[0].payload.children.length===1);
+  const hook=scene.cranes[0].hook.position.clone();state.running=true;C.advance(state,.08);scene.render(state,.1);assert('Hoisting moves the payload and cable together',scene.cranes[0].hook.position.distanceTo(hook)>.05);
+  state.day=19;scene.render(state,0);assert('Wind holds remove active crane lifts',scene.cranes.every(c=>!c.payload.visible));
+  load(7);Object.keys(state.crews).forEach(k=>state.crews[k]=3);scene.render(state,0);assert('All 225 hired people fit the instanced workforce buffers',scene.activity.workerCount===225&&scene.activity.parts.body.count===225);
+  for(const site of ['stratos','starbase','terafab']){load(180,site);assert(site+' completes with buried utilities and no active lifting',state.complete&&scene.cranes.every(c=>!c.payload.visible)&&scene.activity.roadTiles.every(t=>t.visible));}
+  status.textContent='PASS: all construction activity checks';
+ }catch(error){status.textContent='FAIL: '+error.message;}
+ load(7);preview=true;state.running=false;
+}
+document.querySelector('#check').onclick=checks;
+document.querySelector('#preset').onchange=e=>{load(Number(e.target.value));preview=true;state.running=false;status.textContent='Preview / paused';};
+document.querySelector('#run').onclick=()=>{state.running=!state.running;document.querySelector('#run').textContent=state.running?'Pause scene':'Run scene';};
+document.querySelector('#next').onclick=()=>{scene.activity.workIndex++;scene.setCamera('work');};document.querySelector('#parking').onclick=()=>scene.setCamera('parking');
+function frame(now){const dt=Math.min(.1,(now-(last||now))/1000);last=now;if(preview){if(state.running)C.advance(state,dt/12);scene.render(state,dt);}requestAnimationFrame(frame);}
+await checks();requestAnimationFrame(frame);
+</script></html>
