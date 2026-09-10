@@ -30,15 +30,15 @@ async function run(){out.replaceChildren();document.querySelector('#run').disabl
   for(const id of ['a-frame','b-frame','power','cooling']){const task=C.plan(s).find(t=>t.id===id),job=view.craneAssignment(task,s);for(let i=0;i<101;i++){const pose=deliveryPose((.14+i*.0028)/job.group.children.length,job.group.children.length,job.base,job.target);if(view.navigation.boxes.some(box=>segmentHitsBox(pose.vehicle,pose.vehicle,box,2)))carrierClear=false;}}
   assert(site+' material delivery lanes clear installed buildings and equipment',carrierClear);
   if(site==='starbase')assert('Starbase has two eight-module towers and no warehouse roofs',view.halls.every(h=>h.frame.children.length===8&&h.roof.children.length===0));
-  s=seed(0,site);s.speed=8;s.running=true;view.configure(s);let frames=0,penetrations=0,holds=0;
+  s=C.create(site);s.speed=8;C.startProject(s);view.configure(s);let frames=0,penetrations=0,holds=0;
   while(!s.complete&&s.day<135&&frames<2500){
-   view.prepare(s,.08);if(Object.keys(s._siteHolds||{}).length)holds++;
-   C.advance(s,.08);for(const t of C.plan(site))if(t.gate)C.inspect(s,t.id);view.render(s,.1);
-   for(const p of view.activity.people)if(p.position&&!p.seated&&!view.navigation.free(p.position))penetrations++;
-   if(++frames%40===0){status.textContent=site+' day '+s.day.toFixed(1)+' / '+Math.floor(C.progress(s)*100)+'% / '+holds+' traffic holds';await breathe();}
+   C.supervise(s);view.prepare(s,.08);if(Object.keys(s._siteHolds||{}).length)holds++;
+   C.advanceProject(s,.08);view.render(s,.1);
+   for(const p of view.activity.people)if(p.crew<s.crews[p.trade]&&p.position&&!p.seated&&!view.navigation.free(p.position))penetrations++;
+   if(++frames%10===0){status.textContent=site+' day '+s.day.toFixed(1)+' / '+Math.floor(C.progress(s)*100)+'% / '+holds+' traffic holds';await breathe();}
   }
   if(!s.complete){const pre=document.createElement('pre');pre.textContent=JSON.stringify({active:C.allocation(s,true).active.map(t=>({id:t.id,p:s.tasks[t.id].progress})),holds:s._siteHolds,people:view.activity.people.filter(p=>p.position&&!p.seated&&view.activity.traffic?.some(v=>sweptDistance(v.a,v.b,p.position)<v.radius+1.5)).map(p=>({id:p.id,position:p.position,target:p.target,route:p.route}))},null,2);out.append(pre);}
-  assert(site+' completes with guarded traffic, no contacts and no worker inside solid geometry (day '+s.day.toFixed(1)+', holds '+holds+')',s.complete&&s.safety.incidents===0&&penetrations===0);
+  assert(site+' completes automatically with guarded traffic, no contacts and no worker inside solid geometry (day '+s.day.toFixed(1)+', holds '+holds+')',s.complete&&s.safety.incidents===0&&penetrations===0);
  }
  status.textContent='PASS: all interaction checks';
 }catch(e){status.textContent='FAIL: '+e.message;}document.querySelector('#run').disabled=false;}

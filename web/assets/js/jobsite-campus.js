@@ -254,7 +254,7 @@
     }
     function recover(s) {
         if (s.safety.stage==='stopped') { s.safety.controls=true; s.safety.stage='review'; s.running=true; note(s,'Site secured. Traffic separation restored; half-day stand-down review started.'); return true; }
-        if (s.safety.stage==='ready') { s.safety.stage=null; s.running=false; siteHolds(s,{}); note(s,'Review complete. Crews rebriefed; work released for restart.'); return true; }
+        if (s.safety.stage==='ready') { s.safety.stage=null; s.running=false; siteHolds(s,{}); note(s,'Review complete. Crews rebriefed; work released.'); return true; }
         return false;
     }
     function advance(s, days) {
@@ -269,7 +269,7 @@
             const daily = Object.entries(s.crews).reduce((n, [k, count]) => n + count * TRADES[k].rate, 0) + Object.entries(s.equipment).reduce((n, [k, count]) => n + count * EQUIPMENT[k].rate, 0) + 12000;
             s.spent += daily * dt;
             if (!active.length) s.idleDays += dt;
-            if(s.safety.stage==='review'){const used=Math.min(dt,s.safety.remaining);s.safety.remaining=Math.max(0,s.safety.remaining-used);s.safety.lostDays+=used;if(s.safety.remaining<1e-8){s.safety.remaining=0;s.safety.stage='ready';s.running=false;s.day+=dt;note(s,'Stand-down review complete. Release work to resume construction.');break;}}
+            if(s.safety.stage==='review'){const used=Math.min(dt,s.safety.remaining);s.safety.remaining=Math.max(0,s.safety.remaining-used);s.safety.lostDays+=used;if(s.safety.remaining<1e-8){s.safety.remaining=0;s.safety.stage='ready';s.running=false;s.day+=dt;note(s,'Stand-down review complete.');break;}}
             for (const t of [...active,...passive]) {
                 const state = s.tasks[t.id];
                 if (!state.started) { state.started = true; state.start = s.day; if (t.material) s.orders[t.material].used++; }
@@ -277,10 +277,65 @@
                 state.progress += amount; s.spent += amount * t.cost;
                 if (state.progress >= 1 - 1e-8) {
                     state.progress = 1; state.accepted = !t.gate; state.finish = t.gate ? null : s.day + dt;
-                    note(s, t.name + (t.gate ? ': ready for inspection release.' : ': complete.'));
+                    note(s, t.name + (t.gate ? ': inspection work complete.' : ': complete.'));
                 }
             }
             s.day += dt; left -= dt;
+        }
+    }
+    const AUTO_LIMITS={crews:{survey:2,earth:1,civil:1,concrete:2,steel:2,electrical:2,mechanical:2,fitout:2,testing:1},equipment:{earth:1,trench:1,pump:2,crane:2,lift:3,test:1}};
+    function supervise(s) {
+        if(!s.running||s.complete)return;
+        s.safety.controls=true;
+        if(s.safety.stage)return;
+        const tasks=plan(s);
+        for(const t of tasks){
+            const ts=s.tasks[t.id];
+            if(!ts.accepted)ts.enabled=true;
+            if(t.gate&&ts.started&&ts.progress===1&&t.deps.every(id=>done(s,id)||s.legacyWaivers?.includes(t.id+':'+id)))inspect(s,t.id);
+        }
+        if(s.complete){for(const group of ['crews','equipment'])for(const key of Object.keys(s[group]))s[group][key]=0;return;}
+        for(const key of Object.keys(MATERIALS))if(tasks.some(t=>t.material===key&&!s.tasks[t.id].started))order(s,key);
+        s.staffing ||= {crews:{},equipment:{}};
+        const demand={crews:{},equipment:{}},future={crews:new Set(),equipment:new Set()},byId=new Map(tasks.map(t=>[t.id,t])),eta=new Map();
+        const readyIn=t=>Math.max(0,...t.deps.map(finishIn),t.material&&!s.tasks[t.id].started?s.orders[t.material].arrival-s.day:0);
+        function finishIn(id){
+            if(done(s,id))return 0;if(eta.has(id))return eta.get(id);
+            const t=byId.get(id),time=readyIn(t)+t.days*(1-s.tasks[id].progress);eta.set(id,time);return time;
+        }
+        const need=(group,key,zone,soon)=>{if(!key)return;future[group].add(key);if(soon)(demand[group][key] ||= new Set()).add(zone);};
+        for(const t of tasks){
+            if(s.tasks[t.id].accepted||t.elapsed)continue;
+            const soon=readyIn(t)<=.75;
+            need('crews',t.trade,t.zone,soon);need('equipment',t.equipment,t.zone,soon);
+            // Keep the pipe spread through reach inspections; survey capacity is shared.
+            if(t.reachWork)need('crews','survey',t.zone,soon);
+        }
+        for(const group of ['crews','equipment'])for(const key of Object.keys(s[group])){
+            const count=Math.min(AUTO_LIMITS[group][key],demand[group][key]?.size||0),last=s.staffing[group][key] ||= [null,null,null];
+            for(let i=0;i<count;i++)last[i]=s.day;
+            let target=count;
+            // A one-day standby window avoids remobilizing for each short check or weather hold.
+            while(target<s[group][key]&&future[group].has(key)&&last[target]!==null&&s.day-last[target]<1)target++;
+            while(s[group][key]>target)capacity(s,group,key,-1);
+            while(s[group][key]<target)capacity(s,group,key,1);
+        }
+    }
+    function startProject(s) {
+        if(s.complete)return false;
+        if(s.safety.stage==='review'&&s.safety.remaining<=1e-8){s.safety.remaining=0;s.safety.stage='ready';}
+        if(s.safety.stage==='stopped'||s.safety.stage==='ready')recover(s);
+        s.running=true;supervise(s);return true;
+    }
+    function advanceProject(s,days) {
+        if(!s.running||s.complete||!Number.isFinite(days)||days<=0)return;
+        let left=Math.min(days,20);
+        while(left>1e-8&&s.running&&!s.complete){
+            if(s.safety.stage==='review'&&s.safety.remaining<=1e-8){s.safety.remaining=0;s.safety.stage='ready';recover(s);s.running=true;}
+            supervise(s);if(s.complete)break;
+            const dt=Math.min(.05,left,s.safety.stage==='review'?s.safety.remaining:Infinity);advance(s,dt);left-=dt;
+            if(s.safety.stage==='ready'){recover(s);s.running=true;}
+            supervise(s);
         }
     }
     function progress(s) {
@@ -330,10 +385,19 @@
                 if(v.last!==null&&(!v.last||!finite(v.last.day)||v.last.day>s.day||typeof v.last.equipment!=='string'||v.last.equipment.length>80||typeof v.last.worker!=='string'||v.last.worker.length>80))return null;
                 s.safety={controls:v.controls,incidents:v.incidents,lostDays:v.lostDays,remaining:v.remaining,stage:v.stage,last:v.last?{day:v.last.day,equipment:v.last.equipment,worker:v.last.worker}:null};
             }
+            if(data.staffing!==undefined){
+                if(!data.staffing||typeof data.staffing!=='object')return null;
+                s.staffing={crews:{},equipment:{}};
+                for(const group of ['crews','equipment'])for(const key of Object.keys(s[group])){
+                    const times=data.staffing[group]?.[key];
+                    if(!Array.isArray(times)||times.length!==3||times.some(n=>n!==null&&(!finite(n)||n>s.day+.000001)))return null;
+                    s.staffing[group][key]=times.slice();
+                }
+            }
             s.complete = done(s, 'handover'); s.running = false; s.speed = [1, 3, 8].includes(data.speed) ? data.speed : 1;
             s.log = Array.isArray(data.log) ? data.log.filter(e => e && finite(e.day) && e.day <= s.day + .1 && typeof e.message === 'string' && e.message.length < 400).slice(0, 30).map(e => ({ day: e.day, message: e.message })) : [];
             return s;
         } catch (_) { return null; }
     }
-    return { MODELS, model: MODELS.get, SITES, TRADES, EQUIPMENT, MATERIALS, material, PROCESS_SOURCES, workPhase, site, plan, create, done, weather, readiness, allocation, dispatch, order, expedite, capacity, inspect, siteHolds, incident, recover, advance, progress, report, decode };
+    return { MODELS, model: MODELS.get, SITES, TRADES, EQUIPMENT, MATERIALS, material, PROCESS_SOURCES, workPhase, site, plan, create, done, weather, readiness, allocation, dispatch, order, expedite, capacity, inspect, siteHolds, incident, recover, advance, supervise, startProject, advanceProject, progress, report, decode };
 });

@@ -76,3 +76,10 @@ html,body{height:100%;overflow:hidden}#campus-app{position:relative;width:100%;h
 #traffic-separation{accent-color:var(--earth);margin:12px 7px 12px 0}#traffic-separation:focus-visible{outline:3px solid var(--earth);outline-offset:3px}
 
 .model-evidence{font-size:12px;line-height:1.5}.model-evidence p{margin:10px 0}.model-evidence a{overflow-wrap:anywhere}.model-evidence summary{cursor:pointer;color:var(--accent,#bb9871)}
+
+/* Operations is a live reference; quantities replace management controls. */
+.operations-drawer .work-row{grid-template-columns:minmax(180px,1.2fr) minmax(150px,1fr) 64px}
+.resource-amount{font-size:11px;color:var(--complete);white-space:nowrap;padding:4px 7px;border:1px solid var(--line);border-radius:4px;font-variant-numeric:tabular-nums}
+#delivery-roster .resource-card{grid-template-columns:1fr 1fr}
+#delivery-roster .resource-stats{grid-column:2;grid-row:1 / 3;align-self:center}
+@media(max-width:760px){.operations-drawer .work-row{grid-template-columns:minmax(0,1fr) 56px}.operations-drawer .work-state{grid-column:1 / -1}#delivery-roster .resource-card{grid-template-columns:1fr}#delivery-roster .resource-stats{grid-column:1;grid-row:auto}}

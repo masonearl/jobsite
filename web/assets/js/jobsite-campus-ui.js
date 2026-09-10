@@ -27,6 +27,11 @@ function save() {
     } catch (_) { text('storage-status', 'Device storage is unavailable. Download a project record before leaving.'); }
 }
 function pause() { if (state) { state.running = false; dirty = true; save(); if (!onMap) hud(); } }
+function newProject(id) {
+    const s = C.create(id);
+    for (const group of ['crews', 'equipment']) for (const key of Object.keys(s[group])) s[group][key] = 0;
+    return s;
+}
 function makeButton(label, click, className = '') { const b = document.createElement('button'); b.textContent = label; b.className = className; b.addEventListener('click', click); return b; }
 function setTab(name) {
     if (!onMap) openOperations(true, false);
@@ -102,15 +107,9 @@ function buildBoard() {
         const group = document.createElement('section'); group.className = 'work-group'; const h = document.createElement('h3'); h.textContent = label; group.append(h);
         for (const t of members) {
             const row = document.createElement('article'); row.className = 'work-row'; row.dataset.task = t.id;
-            row.innerHTML = '<div class="work-title"><strong>' + t.name + '</strong><small>' + t.quantity + '</small><details class="package-details"><summary>Sequence + scope</summary><p>' + t.lesson + '</p><p>Needs: ' + (t.deps.map(id => tasks.find(x => x.id === id).name).join('; ') || 'Released scenario design') + '.</p><p>' + (t.elapsed ? 'Elapsed time / no crew assigned' : C.TRADES[t.trade].name) + (t.equipment ? ' / ' + C.EQUIPMENT[t.equipment].name : '') + '. ' + t.days.toFixed(1) + ' base scenario days.</p></details></div><div class="work-state"><span></span><small></small></div><div class="work-amount"><span>0%</span><div class="progress"><i></i></div></div><div class="work-actions"></div>';
+            row.innerHTML = '<div class="work-title"><strong>' + t.name + '</strong><small>' + t.quantity + '</small><details class="package-details"><summary>Sequence + scope</summary><p>' + t.lesson + '</p><p>Needs: ' + (t.deps.map(id => tasks.find(x => x.id === id).name).join('; ') || 'Released scenario design') + '.</p><p>' + (t.elapsed ? 'Elapsed time / no crew assigned' : C.TRADES[t.trade].name) + (t.equipment ? ' / ' + C.EQUIPMENT[t.equipment].name : '') + '. ' + t.days.toFixed(1) + ' base scenario days.</p></details></div><div class="work-state"><span></span><small></small></div><div class="work-amount"><span>0%</span><div class="progress"><i></i></div></div>';
             for(const key of t.sources||[]){const source=C.PROCESS_SOURCES[key],link=document.createElement('a');link.href=source.url;link.textContent=source.title;link.target='_blank';link.rel='noopener';link.className='process-source';row.querySelector('.package-details').append(link);}
-            const action = makeButton('Dispatch', () => {
-                const ts = state.tasks[t.id];
-                if (ts.progress >= 1 && t.gate) C.inspect(state, t.id); else C.dispatch(state, t.id, !ts.enabled);
-                dirty = true; hud();
-            }); action.setAttribute('aria-label', 'Dispatch ' + t.name);
-            const priority = makeButton('Priority', () => { state.tasks[t.id].priority = state.tasks[t.id].priority ? 0 : 1; dirty = true; hud(); }); priority.setAttribute('aria-label', 'Prioritize ' + t.name);
-            row.querySelector('.work-actions').append(action, priority); group.append(row); taskRows.set(t.id, { row, action, priority });
+            group.append(row); taskRows.set(t.id, { row });
         }
         $('work-packages').append(group);
     }
@@ -118,21 +117,17 @@ function buildBoard() {
         $(target).replaceChildren();
         for (const [key, item] of Object.entries(catalog)) {
             const card = document.createElement('article'); card.className = 'resource-card resource-row';
-            card.innerHTML = '<div class="resource-info"><details class="resource-detail"><summary><strong>' + item.name + '</strong><span>Details</span></summary><p>' + item.detail + '</p></details><p class="resource-stats"></p></div><div class="resource-buttons"></div>';
-            const minus = makeButton('Remove', () => { C.capacity(state, group, key, -1); dirty = true; hud(); }); minus.setAttribute('aria-label', 'Remove one ' + item.name);
-            const plus = makeButton('Add', () => { C.capacity(state, group, key, 1); dirty = true; hud(); }); plus.setAttribute('aria-label', 'Add one ' + item.name);
-            const amount = document.createElement('span'); card.querySelector('.resource-buttons').append(minus, amount, plus); $(target).append(card);
-            resourceRows.set(group + ':' + key, { card, minus, plus, amount, group, key, item });
+            card.innerHTML = '<div class="resource-info"><details class="resource-detail"><summary><strong>' + item.name + '</strong><span>Details</span></summary><p>' + item.detail + '</p></details><p class="resource-stats"></p></div><div class="resource-amount"></div>';
+            const amount = card.querySelector('.resource-amount'); $(target).append(card);
+            resourceRows.set(group + ':' + key, { card, amount, group, key, item });
         }
     }
     $('delivery-roster').replaceChildren();
     for (const [key, m] of Object.entries(C.MATERIALS)) {
         const card = document.createElement('article'); card.className = 'resource-card';
         const materialName=C.material(state,key).name;
-        card.innerHTML = '<h4>' + materialName + '</h4><p>' + m.quantity + ' package' + (m.quantity > 1 ? 's' : '') + ' / ' + m.lead + ' scenario days / ' + money(m.cost * m.quantity) + '</p><p class="resource-stats"></p><div class="resource-buttons"></div>';
-        const order = makeButton('Order', () => { C.order(state, key); dirty = true; hud(); }); order.setAttribute('aria-label', 'Order ' + m.name);
-        const expedite = makeButton('Expedite +20%', () => { C.expedite(state, key); dirty = true; hud(); }); expedite.setAttribute('aria-label', 'Expedite ' + m.name);
-        card.querySelector('.resource-buttons').append(order, expedite); $('delivery-roster').append(card); deliveryRows.set(key, { card, order, expedite });
+        card.innerHTML = '<h4>' + materialName + '</h4><p>' + m.quantity + ' package' + (m.quantity > 1 ? 's' : '') + ' / ' + m.lead + ' scenario days / ' + money(m.cost * m.quantity) + '</p><p class="resource-stats"></p>';
+        $('delivery-roster').append(card); deliveryRows.set(key, { card });
     }
     const p = C.site(state.site); text('record-fact', p.fact); text('record-source', p.source); $('record-source').href = p.url; text('record-date', p.date);
     renderEvidence('record-model',C.model(state.site));
@@ -141,7 +136,7 @@ function buildBoard() {
     $('speed').value = state.speed; setTab('work');
 }
 async function mobilize() {
-    const saved = readSave(selected.id); state = saved.state || C.create(selected.id); storageBlocked = !!saved.raw && !saved.state;
+    const saved = readSave(selected.id); state = saved.state || newProject(selected.id); storageBlocked = !!saved.raw && !saved.state;
     notice(storageBlocked ? 'The existing save uses an unreadable format. It is preserved; this attempt will not overwrite it. Use Start a new attempt in Project record to explicitly replace it.' : saved.unavailable ? 'Device storage is unavailable. Download a project record before leaving.' : state.modelRevision!==2 ? 'This saved attempt keeps its original layout. Apply the researched layout in Operations > Project record to update it without restarting.' : '');
     onMap = false; document.body.classList.remove('world-view'); $('operations-toggle').hidden = false; $('explorer').hidden = true; $('construction').hidden = false; $('map-return').hidden = false;
     text('project-name', selected.name); text('project-location', selected.place + ' / ' + (selected.type === 'space' ? 'Civil expansion' : 'Representative construction phase'));
@@ -154,36 +149,33 @@ async function mobilize() {
 }
 function showMap() { pause(); onMap = true; document.body.classList.add('world-view'); $('operations-toggle').hidden = true; openOperations(false, false); $('explorer').hidden = false; $('construction').hidden = true; $('map-return').hidden = true; choose(selected.id); world?.resize(); window.scrollTo({ top: 0 }); $('mobilize-campus').focus(); }
 $('mobilize-campus').addEventListener('click', mobilize); $('map-return').addEventListener('click', showMap); $('choose-next').addEventListener('click', showMap);
-function toggleRun() { if (!state || state.complete || onMap || $('field-guide').open) return; if (['stopped','ready'].includes(state.safety.stage)) return; if(state.day===0&&!Object.values(state.tasks).some(t=>t.enabled)){C.dispatch(state,'all',true);Object.keys(C.MATERIALS).forEach(k=>C.order(state,k));} state.running = !state.running; dirty = true; hud(); }
-$('traffic-separation').addEventListener('change',e=>{state.safety.controls=e.target.checked;dirty=true;hud();});
+function toggleRun() {
+    if (!state || state.complete || onMap || $('field-guide').open) return;
+    if (state.running) state.running = false;
+    else {
+        if (['stopped', 'ready'].includes(state.safety.stage)) scene?.activity.regroup();
+        C.startProject(state);
+    }
+    dirty = true; hud();
+}
 $('run-project').addEventListener('click', toggleRun);
 $('speed').addEventListener('change', e => { state.speed = Number(e.target.value); dirty = true; });
-$('dispatch-all').addEventListener('click', () => { C.dispatch(state, 'all', true); dirty = true; hud(); });
-$('hold-all').addEventListener('click', () => { C.dispatch(state, 'all', false); dirty = true; hud(); });
-$('order-all').addEventListener('click', () => { Object.keys(C.MATERIALS).forEach(key => C.order(state, key)); dirty = true; hud(); });
 $('next-action').addEventListener('click', () => { nextAction(); dirty = true; hud(); });
 function desk(allocation) {
-    const tasks = C.plan(state), gates = tasks.find(t => t.gate && state.tasks[t.id].progress === 1 && !state.tasks[t.id].accepted);
     let title, copy, button, action;
-    if (state.complete) { title = 'Ready for the owner.'; copy = 'Every work package is accepted. Review the final score or mobilize another project.'; button = 'Choose next project'; action = showMap; }
-    else if(state.safety.stage==='stopped'){title='Equipment contact / work stopped.';copy=state.safety.last.equipment+' contacted a crew member. All production is stopped. The game charges $25,000, a half-day review and 10 score points.';button='Secure site + start review';action=()=>{scene?.activity.regroup();C.recover(state);};}
-    else if(state.safety.stage==='review'){title='Safety stand-down review.';copy=state.safety.remaining.toFixed(2)+' scenario days remaining. Crews are rebriefed and traffic separation is restored. No construction advances.';button=state.running?'Pause review':'Resume review';action=()=>{state.running=!state.running;};}
-    else if(state.safety.stage==='ready'){title='Review complete / release required.';copy='The incident remains in the project record. Release the work, then restart the project.';button='Release work';action=()=>C.recover(state);}
-    else if (gates) { title = 'Inspection hold.'; copy = gates.name + ' is ready. Release it to open the next work front.'; button = 'Accept inspection'; action = () => C.inspect(state, gates.id); }
-    else if (!tasks.some(t => state.tasks[t.id].enabled && !state.tasks[t.id].accepted)) { title = 'Mobilize the crews.'; copy = 'Dispatch the work packages once. The crews will take each assignment when its prerequisites are ready.'; button = 'Dispatch all crews'; action = () => C.dispatch(state, 'all', true); }
-    else if (Object.values(state.orders).some(o => !o.ordered)) { title = 'Buy ahead of the build.'; copy = 'Steel, switchgear, cooling and fit-out packages have delivery lead times. Order early while the sitework advances.'; button = 'Order all packages / ' + money(Object.entries(C.MATERIALS).reduce((n, [k, m]) => n + (state.orders[k].ordered ? 0 : m.quantity * m.cost), 0)); action = () => Object.keys(C.MATERIALS).forEach(k => C.order(state, k)); }
-    else if (!state.running) { title = 'Project paused.'; copy = 'Assignments and deliveries are saved. Resume the clock when you are ready to continue.'; button = 'Run project'; action = () => { state.running = true; }; }
-    else if (!allocation.active.length && allocation.passive.length) { title='Concrete is curing.';copy=allocation.passive.map(t=>t.name).join('. ')+'. The clock continues without assigning a crew or pump. Strength evidence must still be reviewed before loading.';button='Review work packages';action=()=>setTab('work'); }
-    else if (!allocation.active.length) { title = 'The next handoff is waiting.'; copy = Object.values(allocation.reasons).find(r => !['Complete', 'Not dispatched'].includes(r)) || 'Dispatch unfinished work to continue.'; button = 'Review work packages'; action = () => { setTab('work'); $('tab-work').scrollIntoView({ behavior: 'smooth', block: 'start' }); }; }
-    else { title = allocation.active.length + ' work fronts moving.'; copy = allocation.active.map(t => t.name).join('. ') + '. Open Operations to review waiting reasons before adding resources.'; button = 'Manage labor + equipment'; action = () => { setTab('resources'); $('tab-resources').scrollIntoView({ behavior: 'smooth', block: 'start' }); }; }
+    if (state.complete) { title = 'Ready for the owner.'; copy = 'Every work package is accepted. Review the project record or explore another site.'; button = 'Choose next project'; action = showMap; }
+    else if (!state.running) { title = state.day === 0 ? 'Ready to break ground.' : 'Project paused.'; copy = 'Crews, equipment, deliveries and inspection releases run automatically. Start the clock to watch the project take shape.'; button = state.day === 0 ? 'Start construction' : 'Run project'; action = toggleRun; }
+    else if (state.safety.stage === 'review') { title = 'Safety stand-down review.'; copy = state.safety.remaining.toFixed(2) + ' scenario days remaining. Traffic separation is restored. Construction resumes automatically after the review.'; button = 'See site traffic'; action = () => setTab('resources'); }
+    else if (!allocation.active.length && allocation.passive.length) { title = 'Concrete is curing.'; copy = 'Elapsed curing and test time frees the crew and pump. Inspection follows automatically before the next load goes on the foundation.'; button = 'Explore the sequence'; action = () => setTab('work'); }
+    else if (!allocation.active.length) { title = 'Waiting on the next handoff.'; copy = (Object.values(allocation.reasons).find(r => !['Complete', 'Not dispatched'].includes(r)) || 'Preparing the next work front') + '. Work resumes automatically when conditions are ready.'; button = 'Explore the sequence'; action = () => setTab('work'); }
+    else { title = allocation.active.length + ' work fronts moving.'; copy = allocation.active.map(t => t.name).join('. ') + '. Crews and inspections keep the project moving automatically.'; button = 'Explore crews + equipment'; action = () => setTab('resources'); }
     text('next-title', title); text('next-copy', copy); text('next-action', button); nextAction = action;
 }
 function hud() {
     if (!state || onMap) return;
     const a = C.allocation(state), p = C.site(state.site), progress = C.progress(state), workers = a.active.reduce((n, t) => n + C.TRADES[t.trade].people, 0), payroll = Object.entries(state.crews).reduce((n, [k, count]) => n + count * C.TRADES[k].people, 0);
-    text('run-project', state.complete ? 'Handed over' : state.running ? 'Pause project' : 'Run project'); $('run-project').disabled = state.complete||['stopped','ready'].includes(state.safety.stage);
+    text('run-project', state.complete ? 'Handed over' : state.running ? 'Pause project' : 'Run project'); $('run-project').disabled = state.complete;
     if(state.day===0&&!Object.values(state.tasks).some(t=>t.enabled))text('run-project','Start construction');
-    $('traffic-separation').checked=state.safety.controls;$('traffic-separation').disabled=!!state.safety.stage||state.complete;
     text('safety-status',state.safety.incidents+(state.safety.incidents===1?' incident / ':' incidents / ')+state.safety.lostDays.toFixed(1)+' stand-down days'+(Object.keys(state._siteHolds||{}).length?' / equipment yielding at a crossing':''));
     text('metric-progress', Math.floor(progress * 100) + '%'); $('overall-progress').style.width = progress * 100 + '%';
     text('metric-day', Math.floor(state.day)); text('metric-target', 'Target ' + p.target + ' days' + (state.day > p.target ? ' / over target' : ''));
@@ -192,22 +184,19 @@ function hud() {
     const w = C.weather(state); text('weather-label', w.name); text('weather-next', 'Scenario weather changes in ' + w.ends.toFixed(1) + ' days.');
     for (const t of C.plan(state)) {
         const ts = state.tasks[t.id], r = taskRows.get(t.id), status = a.reasons[t.id]; r.row.dataset.status = status;
-        r.row.querySelector('.work-state span').textContent = status === 'Working' ? (state.running ? (t.reachWork?C.workPhase(state,t).label:'Working') : 'Ready / project paused') : status==='Curing / test wait' ? (state.running ? status : 'Curing clock paused') : status;
+        r.row.querySelector('.work-state span').textContent = status === 'Working' ? (state.running ? (t.reachWork ? C.workPhase(state,t).label : t.gate ? 'Inspection in progress' : 'Working') : 'Ready / project paused') : status==='Curing / test wait' ? (state.running ? status : 'Curing clock paused') : status === 'Not dispatched' ? 'Scheduled automatically' : status === 'Inspection release needed' ? 'Automatic release pending' : status;
         r.row.querySelector('.work-state small').textContent = ts.start !== null ? 'Started day ' + Math.floor(ts.start) + (ts.finish !== null ? ' / accepted day ' + Math.ceil(ts.finish) : '') : (t.elapsed ? 'No crew assigned / elapsed time' : C.TRADES[C.workPhase(state,t).trade||t.trade].people + ' people') + ' / ' + (t.equipment ? C.EQUIPMENT[t.equipment].name : 'Field team');
         r.row.querySelector('.work-amount span').textContent = Math.floor(ts.progress * 100) + '%'; r.row.querySelector('.progress i').style.width = ts.progress * 100 + '%';
-        const label = ts.accepted ? 'Accepted' : ts.progress === 1 && t.gate ? 'Accept' : ts.enabled ? 'Hold' : 'Dispatch'; r.action.textContent = label; r.action.setAttribute('aria-label', label + ' ' + t.name); r.action.disabled = ts.accepted || t.elapsed; if(t.elapsed&&!ts.accepted){r.action.textContent='Automatic';r.action.setAttribute('aria-label','Automatic '+t.name);}
-        r.priority.setAttribute('aria-pressed', !!ts.priority); r.priority.disabled = ts.progress === 1 || t.elapsed;
     }
     for (const r of resourceRows.values()) {
-        const count = state[r.group][r.key], active = count - (r.group === 'crews' ? a.labor[r.key] : a.equipment[r.key]); r.amount.textContent = count + (r.group === 'crews' ? ' crew' + (count > 1 ? 's' : '') : ' spread' + (count > 1 ? 's' : ''));
-        r.card.querySelector('.resource-stats').textContent = active + '/' + count + ' assigned / ' + money(count * r.item.rate) + '/day' + (r.item.people ? ' / ' + count * r.item.people + ' people' : '');
-        r.minus.disabled = count <= 0 || state.complete; r.plus.disabled = count >= 3 || state.complete;
+        const count = state[r.group][r.key], active = count - (r.group === 'crews' ? a.labor[r.key] : a.equipment[r.key]);
+        r.amount.textContent = count ? count + (r.group === 'crews' ? ' crew' : ' spread') + (count > 1 ? 's' : '') : 'Off site';
+        r.card.querySelector('.resource-stats').textContent = count ? active + ' assigned / ' + money(count * r.item.rate) + '/day' + (r.item.people ? ' / ' + count * r.item.people + ' people' : '') : state.complete ? 'Demobilized / project complete' : 'Mobilizes automatically when needed';
     }
     for (const [key, r] of deliveryRows) {
-        const o = state.orders[key]; r.card.querySelector('.resource-stats').textContent = !o.ordered ? 'Not ordered' : o.arrival > state.day ? 'Due day ' + Math.ceil(o.arrival) + ' / ' + (o.arrival - state.day).toFixed(1) + ' days remaining' : 'Delivered / ' + o.used + ' of ' + C.MATERIALS[key].quantity + ' packages installed or in work';
-        r.order.disabled = o.ordered || state.complete; r.order.textContent = o.ordered ? 'Ordered' : 'Order'; r.expedite.disabled = !o.ordered || o.expedited || o.arrival <= state.day || state.complete;
+        const o = state.orders[key]; r.card.querySelector('.resource-stats').textContent = !o.ordered ? 'Orders automatically when construction starts' : o.arrival > state.day ? 'Ordered / due day ' + Math.ceil(o.arrival) + ' / ' + (o.arrival - state.day).toFixed(1) + ' days remaining' : 'Delivered / ' + o.used + ' of ' + C.MATERIALS[key].quantity + ' packages installed or in work';
     }
-    $('order-all').disabled = Object.values(state.orders).every(o => o.ordered) || state.complete;
+
     const milestones = [['Site access + controls', ['controls']], ['Formation accepted', ['formation']], ['Structures erected', ['a-frame', 'b-frame']], ['Buildings + plant complete', ['a-fitout', 'b-fitout', 'power', 'cooling']], ['Startup verified', ['startup']], ['Functional tests passed', ['functional']], ['Systems commissioned', ['test']], ['Owner handover', ['handover']]];
     $('milestones').replaceChildren(); let current = false;
     for (const [name, ids] of milestones) { const li = document.createElement('li'), complete = ids.every(id => C.done(state, id)); li.textContent = name; li.className = complete ? 'done' : current ? '' : 'current'; if (!complete) current = true; $('milestones').append(li); }
@@ -218,7 +207,6 @@ function hud() {
     text('process-save-note',state.migratedFrom===1?'Earlier progress retained. '+state.legacyCredits.length+' newly separated prerequisites received legacy credit; remaining work follows the updated sequence. Saving this upgrade requires a device backup of the original save.':'Process model 2 / 44 work packages. Durations, crew sizes and acceptance outcomes are illustrative.');
     text('project-record-metrics', Math.round(state.laborHours).toLocaleString() + ' productive labor hours / ' + state.peakWorkers + ' peak working people / ' + state.idleDays.toFixed(1) + ' days with no productive work / '+report.incidents+' equipment contacts / '+report.standDownDays.toFixed(1)+' stand-down days.');
     $('project-log').replaceChildren(); for (const entry of state.log) { const li = document.createElement('li'); li.textContent = 'Day ' + Math.floor(entry.day) + ': ' + entry.message; $('project-log').append(li); }
-    $('dispatch-all').disabled = $('hold-all').disabled = state.complete;
 }
 document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => { scene?.setCamera(b.dataset.view); document.querySelectorAll('[data-view]').forEach(x => x.setAttribute('aria-pressed', x === b)); }));
 $('next-crew').addEventListener('click', () => { if (!scene?.activity) return; scene.activity.workIndex++; scene.setCamera('work'); document.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === 'work')); });
@@ -238,7 +226,7 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); }); window.addEventListener('pagehide', pause);
 $('reset-campus').addEventListener('click', () => {
-    if (!state) return; state = C.create(state.site); storageBlocked = false; readSave(state.site); notice(''); dirty = true; buildBoard(); scene?.configure(state); hud(); save();
+    if (!state) return; state = newProject(state.site); storageBlocked = false; readSave(state.site); notice(''); dirty = true; buildBoard(); scene?.configure(state); hud(); save();
 });
 $('apply-site-model').addEventListener('click',()=>{
     if(!state||state.modelRevision===2||storageBlocked)return;
@@ -260,7 +248,7 @@ function loop(now) {
     const dt = Math.min(.1, (now - (last || now)) / 1000); last = now;
     if (onMap && !document.hidden && !$('field-guide').open && now - renderTime > 33) { world?.render(Math.min(.1, (now - renderTime) / 1000)); renderTime = now; }
     if (!onMap && state) {
-        if (state.running && !$('field-guide').open) { scene?.prepare(state,dt / 12 * state.speed); C.advance(state, dt / 12 * state.speed); dirty = true; }
+        if (state.running && !$('field-guide').open) { C.supervise(state); scene?.prepare(state,dt / 12 * state.speed); C.advanceProject(state, dt / 12 * state.speed); dirty = true; }
         if (now - hudTime > 250) { hud(); hudTime = now; }
         if (!document.hidden && !$('field-guide').open && now - renderTime > 33) { scene?.render(state, Math.min(.1, (now - renderTime) / 1000)); renderTime = now; }
         if (now - saveTime > 2000) { save(); saveTime = now; }

@@ -57,7 +57,7 @@ class Handler(SimpleHTTPRequestHandler):
             if query.get('incident') == ['true']:
                 setup += "const stopped=JSON.parse(localStorage.getItem('openmud-jobsite-campus-v1:stratos'));stopped.running=true;JobsiteCampus.incident(stopped,'Haul truck','Civil crew member');localStorage.setItem('openmud-jobsite-campus-v1:stratos',JSON.stringify(stopped));"
             if query.get('fast') == ['true']:
-                setup += 'const original=JobsiteCampus.advance;JobsiteCampus.advance=(s,days)=>original(s,days*32);'
+                setup += 'const original=JobsiteCampus.advanceProject;JobsiteCampus.advanceProject=(s,days)=>original(s,days*32);'
             html = html.replace('<script type="module" src="/assets/js/jobsite-campus-ui.js">', '<script>' + setup + '</script><script type="module" src="/assets/js/jobsite-campus-ui.js">')
             body = html.encode()
             self.send_response(200)

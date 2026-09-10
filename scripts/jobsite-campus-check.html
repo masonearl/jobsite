@@ -42,24 +42,23 @@ async function run(){
   doc().querySelector('[data-view="parking"]').click();await until(()=>el('campus-canvas').dataset.cameraFollow==='false');result('Parking camera leaves automatic crew following',true);
   click('next-crew');await until(()=>el('campus-canvas').dataset.cameraFollow==='true');result('Next crew restores the work camera',true);
   click('operations-toggle');result('Operations drawer opens above the site',!el('operations').hidden&&el('operations-toggle').getAttribute('aria-expanded')==='true');click('operations-close');result('Operations drawer closes and restores focus',el('operations').hidden&&doc().activeElement===el('operations-toggle'));
-  click('dispatch-all');click('order-all');click('run-project');
+  result('Operations has no required dispatch, hiring, purchase or acceptance controls',!el('dispatch-all')&&!el('order-all')&&doc().querySelectorAll('.work-actions button,.resource-buttons button').length===0);
+  click('run-project');
   await until(()=>get('metric-day')!=='0');result('Autonomous work advances without Space',true);
   click('guide-open');const day=get('metric-day'),cost=get('metric-cost');await sleep(500);result('Field guide pauses work and costs',get('metric-day')===day&&get('metric-cost')===cost&&get('run-project')==='Run project');click('guide-close');
-  click('tab-resources');const add=doc().querySelector('[aria-label="Add one Steel + enclosure crew"]');add.click();await sleep(300);result('Resource dispatch changes workforce',el('labor-roster').textContent.includes('2 crews'));
-  click('tab-work');click('run-project');await until(()=>get('next-title')==='Inspection hold.');
-  result('Foundation work waits for inspection',doc().querySelector('[data-task="a-slab"] .work-amount span').textContent==='0%');click('next-action');
-  const earlyDeadline=Date.now()+45000;while(Number(get('metric-progress').replace('%',''))<=35&&Date.now()<earlyDeadline){if(get('next-title')==='Inspection hold.')click('next-action');await sleep(150);}
-  await until(()=>Number(get('metric-progress').replace('%',''))>35);click('map-return');click('mobilize-campus');await sleep(400);
+  click('tab-resources');result('Roster is an optional automatic reference',get('panel-resources').includes('assigned automatically')&&doc().querySelectorAll('.resource-amount').length===15);
+  click('run-project');const openDay=get('metric-day');await until(()=>get('metric-day')!==openDay);result('Reading the roster does not pause construction',!el('operations').hidden&&get('run-project')==='Pause project');click('operations-close');
+  await until(()=>Number(get('metric-progress').replace('%',''))>35,55000);click('map-return');click('mobilize-campus');await sleep(400);
   result('Switching to map preserves progress and resumes paused',get('run-project')==='Run project'&&Number(get('metric-progress').replace('%',''))>35);
   click('run-project');const deadline=Date.now()+55000;
-  while(el('completion').hidden&&Date.now()<deadline){if(get('next-title')==='Inspection hold.')click('next-action');await sleep(150);}
-  result('Entire project reaches accepted handover',!el('completion').hidden&&get('metric-progress')==='100%');
+  while(el('completion').hidden&&Date.now()<deadline){await sleep(150);}
+  result('Entire project reaches accepted handover without management or inspection clicks',!el('completion').hidden&&get('metric-progress')==='100%');
   result('All 44 work packages accepted',doc().querySelectorAll('[data-status="Complete"]').length===44);
   await until(()=>Number(el('campus-canvas').dataset.drawCalls)>0);
   result('3D scene remains available',el('scene-error').hidden&&el('campus-canvas').width>0);
   click('map-return');doc().querySelector('[data-destination="starbase"]').click();click('mobilize-campus');await sleep(350);
   result('Different destinations have isolated saves and scopes',get('metric-progress')==='0%'&&get('work-packages').includes('Launch mount 2 + tower'));
-  click('run-project');await until(()=>get('metric-day')!=='0');click('guide-open');result('Start construction dispatches work and purchases materials on a fresh project',get('delivery-roster').includes('Ordered')&&doc().querySelectorAll('[data-task] .work-actions button').length>0);click('guide-close');
+  click('run-project');await until(()=>get('metric-day')!=='0');click('guide-open');result('Start construction dispatches work and purchases materials on a fresh project',get('delivery-roster').includes('Ordered')&&doc().querySelectorAll('[data-task] .work-actions button').length===0);click('guide-close');
   if(mobile)result('390 px viewport has no horizontal page overflow',doc().documentElement.scrollWidth<=390);
   if(mobile){
    const visibleButtons=[...doc().querySelectorAll('.topbar button')].filter(b=>!b.hidden);
@@ -70,10 +69,10 @@ async function run(){
   f.src='/__campus-fixture?world-unavailable=true';await until(()=>doc()?.body?.dataset.campusReady==='true'&&!el('world-error').hidden);
   result('WebGL globe failure keeps the project list available',!el('destinations').hidden&&doc().querySelectorAll('[data-destination]').length===7);
   click('mobilize-campus');await until(()=>Number(el('campus-canvas').dataset.drawCalls)>0);result('A project remains playable if only the globe fails',el('scene-error').hidden&&!el('construction').hidden);
-  f.src='/__campus-fixture?seed=earth&incident=true&fast=true';await until(()=>doc()?.URL.includes('incident=true')&&doc()?.body?.dataset.campusReady==='true');click('mobilize-campus');await until(()=>get('next-title')==='Equipment contact / work stopped.');
-  result('Saved incident opens with work stopped and Run disabled',el('run-project').disabled&&get('next-copy').includes('$25,000'));
-  click('next-action');await until(()=>get('next-title')==='Review complete / release required.');result('Safety review finishes without automatically restarting work',el('run-project').disabled);
-  click('next-action');result('Explicit release restores Run and retains the incident record',!el('run-project').disabled&&get('safety-status').includes('1 incident'));
+  f.src='/__campus-fixture?seed=earth&incident=true&fast=true';await until(()=>doc()?.URL.includes('incident=true')&&doc()?.body?.dataset.campusReady==='true');click('mobilize-campus');await until(()=>get('next-title')==='Project paused.');
+  result('Saved incident can resume from the ordinary Run control',!el('run-project').disabled&&get('safety-status').includes('1 incident'));
+  click('run-project');await until(()=>get('next-title').includes('work fronts moving'));result('Timed safety review releases automatically and keeps the incident record',get('run-project')==='Pause project'&&get('safety-status').includes('1 incident'));
+  click('run-project');
   document.querySelector('#status').textContent='PASS: all campus browser checks';
  }catch(error){document.querySelector('#status').textContent='FAIL: '+error.message;}finally{document.querySelector('#run').disabled=false;}
 }
