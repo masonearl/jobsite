@@ -1,7 +1,7 @@
 (function (root, factory) {
-    if (typeof module === 'object' && module.exports) module.exports = factory();
-    else root.JobsiteCampus = factory();
-})(typeof globalThis === 'object' ? globalThis : this, function () {
+    if (typeof module === 'object' && module.exports) module.exports = factory(require('./jobsite-campus-models.js'));
+    else root.JobsiteCampus = factory(root.JobsiteCampusModels);
+})(typeof globalThis === 'object' ? globalThis : this, function (MODELS) {
     'use strict';
     // Public project identities are separate from the deliberately compressed game model.
     const SITES = [
@@ -16,7 +16,7 @@
         { id: 'indiana', name: 'AWS / New Carlisle', place: 'New Carlisle, Indiana', type: 'data', lat: 41.7, lon: -86.5, biome: 'forest', climate: 'Wet ground / rain delays', earth: 1.1, weather: 'rain', target: 56,
           status: 'Campus investment announced April 2024', fact: 'AWS announced a data-center campus at Indiana Enterprise Center in St. Joseph County. Build a representative phase; the scenario is not an AWS design or current construction schedule.', source: 'AWS Indiana investment announcement', url: 'https://www.aboutamazon.com/news/aws/aws-indiana-investment-11-billion', date: 'April 25, 2024' },
         { id: 'starbase', name: 'SpaceX / Starbase', place: 'Boca Chica, Texas', type: 'space', lat: 25.99, lon: -97.15, biome: 'coast', climate: 'Coastal ground / crane wind holds', earth: 1.25, weather: 'wind', target: 66,
-          status: 'Existing launch site / civil works scenario', fact: 'The FAA identifies Starbase at Boca Chica as a Starship development and flight-test site. Build a fictional civil expansion with a pad, integration building, tower and support utilities. Rocket operations are outside this scenario.', source: 'FAA project background', url: 'https://www.faa.gov/space/stakeholder_engagement/spacex_starship_ksc', date: 'FAA background, checked September 9, 2026' },
+          status: 'Existing launch site / civil works scenario', fact: 'The FAA identifies Starbase at Boca Chica as a Starship development and flight-test site. The current model reconstructs two launch work fronts, tanks and support utilities from a public FAA exhibit. Rocket operations are outside this scenario.', source: 'FAA project background', url: 'https://www.faa.gov/space/stakeholder_engagement/spacex_starship', date: 'FAA background, checked September 9, 2026' },
         { id: 'terafab', name: 'Terafab', place: 'Grimes County, Texas', type: 'fab', lat: 30.61, lon: -96.08, biome: 'forest', climate: 'Clay ground / rain delays', earth: 1.3, weather: 'rain', target: 65,
           status: 'Location announced August 2026', fact: 'SpaceX announced Grimes County as the location for Terafab, combining logic, memory and advanced packaging. This game models a representative fab phase with cleanrooms and process utilities, not the announced full-scale factory.', source: 'SpaceX Terafab announcement', url: 'https://new.spacex.com/updates', date: 'August 6, 2026' }
     ];
@@ -86,7 +86,7 @@
         overlap: { title: 'Microsoft / an active datacenter construction sequence', url: 'https://local.microsoft.com/blog/boyd-farms-datacenter-construction-update/' }
     };
     const planCache = new Map();
-    function plan(id) {
+    function basePlan(id) {
         id=site(id).id;if(planCache.has(id))return planCache.get(id).slice();
         const tasks = legacyPlan(id), byId = Object.fromEntries(tasks.map(t => [t.id, t]));
         const change = (key, fields) => Object.assign(byId[key], fields);
@@ -132,6 +132,30 @@
         while(pending.length){const i=pending.findIndex(t=>t.deps.every(d=>ordered.some(p=>p.id===d)));if(i<0)throw Error('Construction plan has a dependency cycle');ordered.push(...pending.splice(i,1));}
         planCache.set(id,ordered);return ordered.slice();
     }
+    function plan(value) {
+        const state=typeof value==='object'?value:null, tasks=basePlan(state?state.site:value);
+        if(!state||state.modelRevision!==2)return tasks;
+        const key=state.site+':model2';if(planCache.has(key))return planCache.get(key).slice();
+        const model=MODELS.get(state);
+        const mapped=tasks.map(t=>{
+            const front=model.fronts.find(f=>f.key===t.zone);
+            if(!front){
+                if(state.site==='starbase'&&t.zone==='cooling')return{...t,name:t.name.replace(/Cooling plant|Cooling-plant|Cooling|cooling/g,'Water farm + deluge'),lesson:'Prepare and release equipment supports, install the water-system packages and verify the ground-support systems. The scenario does not model fueling or launch operations.'};
+                return t;
+            }
+            let suffix=t.name.split(' / ').slice(1).join(' / ');
+            if(state.site==='starbase'){
+                if(t.id.endsWith('-envelope'))suffix='platforms + tower access';
+                if(t.id.endsWith('-fitout'))suffix='launch mount + ground support';
+                if(t.id.endsWith('-mep'))suffix='deluge + commodity services';
+            }
+            return {...t,name:front.name+' / '+suffix,...(state.site==='starbase'?{outdoor:!t.elapsed}:{}),...(state.site==='starbase'&&t.id.endsWith('-envelope')?{quantity:'1 tower-access system',lesson:'Install tower platforms and access steel after structural release. This launch front has no weather-tight building shell; the sequence is a compressed civil-work reconstruction.'}:{}),...(state.site==='starbase'&&t.id.endsWith('-frame')?{quantity:'8 illustrative tower modules'}:{})};
+        });
+        planCache.set(key,mapped);return mapped.slice();
+    }
+    function material(s,key) {
+        const base=MATERIALS[key];return key==='cooling'&&s.modelRevision===2&&s.site==='starbase'?{...base,name:'Water-farm + deluge packages'}:base;
+    }
     const REACH_COUNT=6;
     function workPhase(s,t) {
         if(!t.reachWork)return {label:t.elapsed?'Curing / awaiting test evidence':t.name,end:1};
@@ -142,7 +166,7 @@
     }
     function create(id) {
         id = site(id).id;
-        return { version: 2, site: id, day: 0, running: false, speed: 1, complete: false, spent: 0, budget: site(id).type === 'fab' ? 33000000 : site(id).type === 'space' ? 32000000 : 31000000, laborHours: 0, idleDays: 0, peakWorkers: 0,
+        return { version: 2, modelRevision: 2, site: id, day: 0, running: false, speed: 1, complete: false, spent: 0, budget: site(id).type === 'fab' ? 33000000 : site(id).type === 'space' ? 32000000 : 31000000, laborHours: 0, idleDays: 0, peakWorkers: 0,
             crews: Object.fromEntries(Object.keys(TRADES).map(k => [k, 1])), equipment: Object.fromEntries(Object.keys(EQUIPMENT).map(k => [k, k === 'lift' ? 2 : 1])),
             tasks: Object.fromEntries(plan(id).map(t => [t.id, { progress: 0, enabled: false, accepted: false, started: false, priority: 0, start: null, finish: null }])),
             safety: { controls: true, incidents: 0, lostDays: 0, remaining: 0, stage: null, last: null },
@@ -163,11 +187,11 @@
         if (state.progress >= 1) return 'Inspection release needed';
         if (!state.enabled && !t.elapsed) return 'Not dispatched';
         const missing = t.deps.filter(id => !done(s, id));
-        if (missing.length) return 'Waiting for ' + missing.map(id => plan(s.site).find(x => x.id === id).name).join(', ');
+        if (missing.length) return 'Waiting for ' + missing.map(id => plan(s).find(x => x.id === id).name).join(', ');
         if (t.material && !state.started) {
             const order = s.orders[t.material];
-            if (!order.ordered) return 'Order ' + MATERIALS[t.material].name.toLowerCase();
-            if (order.arrival > s.day) return MATERIALS[t.material].name + ' arrives day ' + Math.ceil(order.arrival);
+            if (!order.ordered) return 'Order ' + material(s,t.material).name.toLowerCase();
+            if (order.arrival > s.day) return material(s,t.material).name + ' arrives day ' + Math.ceil(order.arrival);
             if (order.used >= MATERIALS[t.material].quantity) return 'Material unavailable';
         }
         if (t.equipment === 'crane' && weather(s).crane) return 'High wind / crane hold';
@@ -175,7 +199,7 @@
     }
     function allocation(s, ignoreHolds = false) {
         const labor = { ...s.crews }, equipment = { ...s.equipment }, active = [], passive = [], reasons = {};
-        const tasks = plan(s.site).sort((a, b) => s.tasks[b.id].priority - s.tasks[a.id].priority || Number(s.tasks[b.id].started) - Number(s.tasks[a.id].started));
+        const tasks = plan(s).sort((a, b) => s.tasks[b.id].priority - s.tasks[a.id].priority || Number(s.tasks[b.id].started) - Number(s.tasks[a.id].started));
         for (const original of tasks) {
             const phase=workPhase(s,original),t={...original,...(original.reachWork?{trade:phase.trade,equipment:phase.equipment}:{}),phase:phase.label};
             let why = readiness(s, t, true);
@@ -190,18 +214,18 @@
     }
     function dispatch(s, id, enabled) {
         if (s.complete) return;
-        for (const t of plan(s.site)) if (id === 'all' || t.id === id) s.tasks[t.id].enabled = enabled;
+        for (const t of plan(s)) if (id === 'all' || t.id === id) s.tasks[t.id].enabled = enabled;
     }
     function order(s, key) {
         if (!MATERIALS[key] || s.orders[key].ordered || s.complete) return false;
-        const m = MATERIALS[key]; s.orders[key] = { ordered: true, arrival: s.day + m.lead, used: 0, expedited: false };
+        const m = material(s,key); s.orders[key] = { ordered: true, arrival: s.day + m.lead, used: 0, expedited: false };
         s.spent += m.cost * m.quantity; note(s, m.name + ' ordered; due day ' + Math.ceil(s.orders[key].arrival) + '.'); return true;
     }
     function expedite(s, key) {
         const o = s.orders[key];
         if (!o?.ordered || o.expedited || o.arrival <= s.day || s.complete) return false;
         o.arrival = s.day + (o.arrival - s.day) * .55; o.expedited = true;
-        s.spent += MATERIALS[key].cost * MATERIALS[key].quantity * .2; note(s, MATERIALS[key].name + ' expedited at 20% premium.'); return true;
+        s.spent += MATERIALS[key].cost * MATERIALS[key].quantity * .2; note(s, material(s,key).name + ' expedited at 20% premium.'); return true;
     }
     function capacity(s, group, key, delta) {
         const catalog = group === 'crews' ? TRADES : group === 'equipment' ? EQUIPMENT : null;
@@ -212,7 +236,7 @@
         return true;
     }
     function inspect(s, id) {
-        const t = plan(s.site).find(t => t.id === id), state = s.tasks[id];
+        const t = plan(s).find(t => t.id === id), state = s.tasks[id];
         if (s.safety?.stage || !t?.gate || state.progress < 1 || state.accepted) return false;
         state.accepted = true; state.finish = s.day; note(s, t.name + ' accepted.');
         if (id === 'handover') { s.complete = true; s.running = false; }
@@ -260,7 +284,7 @@
         }
     }
     function progress(s) {
-        const tasks = plan(s.site), total = tasks.reduce((n, t) => n + t.days, 0);
+        const tasks = plan(s), total = tasks.reduce((n, t) => n + t.days, 0);
         return tasks.reduce((n, t) => n + t.days * (t.gate && !done(s, t.id) ? s.tasks[t.id].progress * .9 : s.tasks[t.id].progress), 0) / total;
     }
     function report(s) {
@@ -272,7 +296,9 @@
         try {
             const data = JSON.parse(raw);
             if (!data || ![1,2].includes(data.version) || !SITES.some(s => s.id === data.site)) return null;
-            const s = create(data.site), tasks=data.version===1?legacyPlan(data.site):plan(data.site), finite = n => Number.isFinite(n) && n >= 0;
+            if(data.modelRevision!==undefined&&![1,2].includes(data.modelRevision))return null;
+            const s = create(data.site);s.modelRevision=data.modelRevision===2?2:1;
+            const tasks=data.version===1?legacyPlan(data.site):plan(data.site), finite = n => Number.isFinite(n) && n >= 0;
             for (const k of ['day', 'spent', 'laborHours', 'idleDays', 'peakWorkers']) { if (!finite(data[k]) || data[k] > 1e12) return null; s[k] = data[k]; }
             for (const group of ['crews', 'equipment']) for (const key of Object.keys(s[group])) { const n = data[group]?.[key]; if (!Number.isInteger(n) || n < 0 || n > 3) return null; s[group][key] = n; }
             for (const t of tasks) {
@@ -284,7 +310,7 @@
             }
             if(data.version===1){
                 if(tasks.some(t=>s.tasks[t.id].started&&!t.deps.every(id=>s.tasks[id].accepted)))return null;
-                const legacyIds=new Set(tasks.map(t=>t.id)),modern=plan(s.site),credited=new Set();
+                const legacyIds=new Set(tasks.map(t=>t.id)),modern=plan(s),credited=new Set();
                 const credit=(id,day)=>{if(legacyIds.has(id)||credited.has(id))return;const t=modern.find(t=>t.id===id);for(const d of t.deps)credit(d,day);s.tasks[id]={progress:1,enabled:true,accepted:true,started:true,priority:0,start:day,finish:day};credited.add(id);};
                 // Existing downstream work is retained. Only newly introduced prerequisites receive legacy credit.
                 for(const t of modern)if(legacyIds.has(t.id)&&s.tasks[t.id].started)for(const d of t.deps)credit(d,s.tasks[t.id].start||0);
@@ -309,5 +335,5 @@
             return s;
         } catch (_) { return null; }
     }
-    return { SITES, TRADES, EQUIPMENT, MATERIALS, PROCESS_SOURCES, workPhase, site, plan, create, done, weather, readiness, allocation, dispatch, order, expedite, capacity, inspect, siteHolds, incident, recover, advance, progress, report, decode };
+    return { MODELS, model: MODELS.get, SITES, TRADES, EQUIPMENT, MATERIALS, material, PROCESS_SOURCES, workPhase, site, plan, create, done, weather, readiness, allocation, dispatch, order, expedite, capacity, inspect, siteHolds, incident, recover, advance, progress, report, decode };
 });

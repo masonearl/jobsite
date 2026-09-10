@@ -1,10 +1,11 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><title>Jobsite interaction checks</title>
 <style>body{background:#181512;color:#efe7db;font:14px system-ui;margin:20px}button{padding:10px}canvas{width:100%;height:620px}li{margin:6px}.fail{color:#ffac90}</style>
-<script type="importmap">{"imports":{"three":"/assets/vendor/three/three.module.min.js"}}</script><script src="/assets/js/jobsite-campus.js"></script>
+<script type="importmap">{"imports":{"three":"/assets/vendor/three/three.module.min.js"}}</script><script src="/assets/js/jobsite-campus-models.js"></script><script src="/assets/js/jobsite-campus.js"></script>
 <h1>Construction interactions</h1><button id="run">Run interaction checks</button><p id="status">Ready</p><ol id="results"></ol><div><canvas id="scene"></canvas></div>
 <script type="module">
 import {CampusScene} from '/assets/js/jobsite-campus-scene.js';
-import {sweptDistance} from '/assets/js/jobsite-campus-spatial.mjs';
+import {deliveryPose} from '/assets/js/jobsite-campus-logistics.mjs';
+import {sweptDistance,segmentHitsBox} from '/assets/js/jobsite-campus-spatial.mjs';
 const C=JobsiteCampus,view=new CampusScene(document.querySelector('canvas'),()=>{}),out=document.querySelector('#results'),status=document.querySelector('#status');
 function assert(name,pass){const li=document.createElement('li');li.textContent=(pass?'PASS: ':'FAIL: ')+name;li.className=pass?'pass':'fail';out.append(li);if(!pass)throw Error(name);}
 function seed(day,site='stratos'){const s=C.create(site);C.dispatch(s,'all',true);Object.keys(C.MATERIALS).forEach(k=>C.order(s,k));s.running=true;for(let i=0;i<day*10&&!s.complete;i++){C.advance(s,.1);for(const t of C.plan(site))if(t.gate)C.inspect(s,t.id);}s.running=false;return s;}
@@ -21,7 +22,14 @@ async function run(){out.replaceChildren();document.querySelector('#run').disabl
  view.prepare(s,.01);C.advance(s,.01);assert('Guarded equipment holds production for a pedestrian in its path',s.tasks.grade.progress===grade&&s.safety.incidents===0&&s._siteHolds.grade);
  s.safety.controls=false;view.prepare(s,.01);assert('Actual overlapping equipment and worker trigger a nongraphic stopped-work incident',s.safety.stage==='stopped'&&!s.running&&s.safety.incidents===1);
  const tasks=JSON.stringify(s.tasks);view.activity.regroup();C.recover(s);C.advance(s,.5);view.render(s,.1);assert('Review consumes time with no construction, then requires a separate release',s.safety.stage==='ready'&&JSON.stringify(s.tasks)===tasks);C.recover(s);assert('Release restores protected traffic and preserves the incident record',s.safety.controls&&s.safety.stage===null&&C.decode(JSON.stringify(s)).safety.incidents===1);
- for(const site of ['stratos','starbase','terafab']){
+ for(const site of C.SITES.map(p=>p.id)){
+  s=seed(180,site);view.configure(s);
+  const model=C.model(s);assert(site+' uses its own destination model and published evidence',view.model.context===model.context&&model.sources.length>0);
+  for(const h of view.halls){const t=C.plan(s).find(t=>t.id===h.key+'-frame'),job=view.craneAssignment(t,s),actual=job.group.localToWorld(job.part.position.clone()).toArray();assert(site+' '+h.key+' crane target matches the physical resized structure',job.target.every((n,i)=>Math.abs(n-actual[i])<1e-6));}
+  let carrierClear=true;
+  for(const id of ['a-frame','b-frame','power','cooling']){const task=C.plan(s).find(t=>t.id===id),job=view.craneAssignment(task,s);for(let i=0;i<101;i++){const pose=deliveryPose((.14+i*.0028)/job.group.children.length,job.group.children.length,job.base,job.target);if(view.navigation.boxes.some(box=>segmentHitsBox(pose.vehicle,pose.vehicle,box,2)))carrierClear=false;}}
+  assert(site+' material delivery lanes clear installed buildings and equipment',carrierClear);
+  if(site==='starbase')assert('Starbase has two eight-module towers and no warehouse roofs',view.halls.every(h=>h.frame.children.length===8&&h.roof.children.length===0));
   s=seed(0,site);s.speed=8;s.running=true;view.configure(s);let frames=0,penetrations=0,holds=0;
   while(!s.complete&&s.day<135&&frames<2500){
    view.prepare(s,.08);if(Object.keys(s._siteHolds||{}).length)holds++;

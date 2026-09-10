@@ -50,7 +50,7 @@ class Handler(SimpleHTTPRequestHandler):
                 setup = "localStorage.setItem('openmud-jobsite-campus-v1:stratos'," + json.dumps(json.dumps(old)) + ");"
             if query.get('seed'):
                 site = query.get('site', ['stratos'])[0]
-                if site not in ['stratos', 'starbase', 'terafab']:
+                if site not in ['stratos','abilene','saline','dona-ana','indiana','starbase','terafab']:
                     site = 'stratos'
                 day = {'arrival': 0, 'earth': 7, 'concrete': 22, 'steel': 29, 'mid': 40, 'complete': 180}.get(query['seed'][0], 40)
                 setup = f"const C=JobsiteCampus,s=C.create('{site}');C.dispatch(s,'all',true);Object.keys(C.MATERIALS).forEach(k=>C.order(s,k));s.running=true;for(let i=0;i<{day * 10}&&!s.complete;i++){{C.advance(s,.1);for(const t of C.plan(s.site))if(t.gate)C.inspect(s,t.id);}}s.running=false;localStorage.setItem('openmud-jobsite-campus-v1:'+s.site,JSON.stringify(s));"

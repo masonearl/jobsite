@@ -40,6 +40,11 @@ document.querySelectorAll('[data-tab]').forEach((b, i, tabs) => {
         if (direction) { e.preventDefault(); const next = tabs[(i + direction + tabs.length) % tabs.length]; setTab(next.dataset.tab); next.focus(); }
     });
 });
+function renderEvidence(id,model) {
+    const box=$(id);box.replaceChildren();
+    for(const [label,value] of [['Layout basis',model.basis],['Published evidence',model.observed],['Reconstruction',model.inferred]]){const p=document.createElement('p'),strong=document.createElement('strong');strong.textContent=label+': ';p.append(strong,document.createTextNode(value));box.append(p);}
+    for(const source of model.sources){const p=document.createElement('p'),a=document.createElement('a');a.href=source.url;a.textContent=source.title+' / '+source.date;a.target='_blank';a.rel='noopener';p.append(a);box.append(p);}
+}
 function choose(id) {
     selected = C.site(id);
     document.querySelectorAll('[data-destination]').forEach(b => b.setAttribute('aria-pressed', b.dataset.destination === id));
@@ -47,7 +52,8 @@ function choose(id) {
     text('destination-source', selected.source); $('destination-source').href = selected.url; text('destination-date', selected.date);
     text('destination-type', { data: 'Data-center construction', fab: 'Semiconductor fabrication campus', space: 'Launch-site civil works' }[selected.type]);
     $('destination-image').style.backgroundImage = 'linear-gradient(0deg, #15120f55, transparent), url(/assets/jobsite/' + (selected.biome === 'coast' ? 'desert' : selected.biome) + '.jpg)';
-    text('destination-scope', selected.type === 'space' ? 'Pad, tower, integration building + support yards' : selected.type === 'fab' ? 'Process fab, packaging hall + central plant' : 'Two data halls + power and cooling yards');
+    text('destination-scope',C.model(selected.id).program);
+    renderEvidence('destination-model',C.model(selected.id));
     text('destination-challenge', selected.climate + '. Target: ' + selected.target + ' scenario days.');
     const saved = readSave(id);
     text('mobilize-campus', saved.state ? saved.state.complete ? 'Visit completed project' : 'Resume project' : 'Mobilize project');
@@ -91,7 +97,7 @@ $('operations-close').addEventListener('click', () => openOperations(false));
 const taskRows = new Map(), resourceRows = new Map(), deliveryRows = new Map();
 function buildBoard() {
     taskRows.clear(); resourceRows.clear(); deliveryRows.clear(); $('work-packages').replaceChildren();
-    const tasks = C.plan(state.site), civil=['survey','controls','clear','grade','drain','duct','utility-test','formation'], groups = [ ['Civil works',tasks.filter(t=>civil.includes(t.id))], ['Building work fronts',tasks.filter(t=>/^[ab]-/.test(t.id))], ['Infrastructure + turnover',tasks.filter(t=>!civil.includes(t.id)&&!/^[ab]-/.test(t.id))] ];
+    const tasks = C.plan(state), civil=['survey','controls','clear','grade','drain','duct','utility-test','formation'], groups = [ ['Civil works',tasks.filter(t=>civil.includes(t.id))], ['Building work fronts',tasks.filter(t=>/^[ab]-/.test(t.id))], ['Infrastructure + turnover',tasks.filter(t=>!civil.includes(t.id)&&!/^[ab]-/.test(t.id))] ];
     for (const [label, members] of groups) {
         const group = document.createElement('section'); group.className = 'work-group'; const h = document.createElement('h3'); h.textContent = label; group.append(h);
         for (const t of members) {
@@ -122,23 +128,27 @@ function buildBoard() {
     $('delivery-roster').replaceChildren();
     for (const [key, m] of Object.entries(C.MATERIALS)) {
         const card = document.createElement('article'); card.className = 'resource-card';
-        card.innerHTML = '<h4>' + m.name + '</h4><p>' + m.quantity + ' package' + (m.quantity > 1 ? 's' : '') + ' / ' + m.lead + ' scenario days / ' + money(m.cost * m.quantity) + '</p><p class="resource-stats"></p><div class="resource-buttons"></div>';
+        const materialName=C.material(state,key).name;
+        card.innerHTML = '<h4>' + materialName + '</h4><p>' + m.quantity + ' package' + (m.quantity > 1 ? 's' : '') + ' / ' + m.lead + ' scenario days / ' + money(m.cost * m.quantity) + '</p><p class="resource-stats"></p><div class="resource-buttons"></div>';
         const order = makeButton('Order', () => { C.order(state, key); dirty = true; hud(); }); order.setAttribute('aria-label', 'Order ' + m.name);
         const expedite = makeButton('Expedite +20%', () => { C.expedite(state, key); dirty = true; hud(); }); expedite.setAttribute('aria-label', 'Expedite ' + m.name);
         card.querySelector('.resource-buttons').append(order, expedite); $('delivery-roster').append(card); deliveryRows.set(key, { card, order, expedite });
     }
     const p = C.site(state.site); text('record-fact', p.fact); text('record-source', p.source); $('record-source').href = p.url; text('record-date', p.date);
+    renderEvidence('record-model',C.model(state.site));
+    $('apply-site-model').hidden=state.modelRevision===2;
+    text('scene-mode',state.modelRevision===2?C.model(state).basis:'Original saved layout');
     $('speed').value = state.speed; setTab('work');
 }
 async function mobilize() {
     const saved = readSave(selected.id); state = saved.state || C.create(selected.id); storageBlocked = !!saved.raw && !saved.state;
-    notice(storageBlocked ? 'The existing save uses an unreadable format. It is preserved; this attempt will not overwrite it. Use Start a new attempt in Project record to explicitly replace it.' : saved.unavailable ? 'Device storage is unavailable. Download a project record before leaving.' : '');
+    notice(storageBlocked ? 'The existing save uses an unreadable format. It is preserved; this attempt will not overwrite it. Use Start a new attempt in Project record to explicitly replace it.' : saved.unavailable ? 'Device storage is unavailable. Download a project record before leaving.' : state.modelRevision!==2 ? 'This saved attempt keeps its original layout. Apply the researched layout in Operations > Project record to update it without restarting.' : '');
     onMap = false; document.body.classList.remove('world-view'); $('operations-toggle').hidden = false; $('explorer').hidden = true; $('construction').hidden = false; $('map-return').hidden = false;
     text('project-name', selected.name); text('project-location', selected.place + ' / ' + (selected.type === 'space' ? 'Civil expansion' : 'Representative construction phase'));
     buildBoard(); openOperations(false, false); hud(); window.scrollTo({ top: 0 }); $('run-project').focus();
     try {
         if (!scene) { const { CampusScene } = await import('./jobsite-campus-scene.js'); scene = new CampusScene($('campus-canvas'), () => { pause(); $('scene-error').hidden = false; }); }
-        scene.configure(state); scene.setCamera('work'); document.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === 'work')); $('scene-error').hidden = true;
+        scene.configure(state); const initialView=state.modelRevision===2?'site':'work'; scene.setCamera(initialView); document.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === initialView)); $('scene-error').hidden = true;
     } catch (_) { $('scene-error').hidden = false; }
     dirty = true; save();
 }
@@ -153,7 +163,7 @@ $('hold-all').addEventListener('click', () => { C.dispatch(state, 'all', false);
 $('order-all').addEventListener('click', () => { Object.keys(C.MATERIALS).forEach(key => C.order(state, key)); dirty = true; hud(); });
 $('next-action').addEventListener('click', () => { nextAction(); dirty = true; hud(); });
 function desk(allocation) {
-    const tasks = C.plan(state.site), gates = tasks.find(t => t.gate && state.tasks[t.id].progress === 1 && !state.tasks[t.id].accepted);
+    const tasks = C.plan(state), gates = tasks.find(t => t.gate && state.tasks[t.id].progress === 1 && !state.tasks[t.id].accepted);
     let title, copy, button, action;
     if (state.complete) { title = 'Ready for the owner.'; copy = 'Every work package is accepted. Review the final score or mobilize another project.'; button = 'Choose next project'; action = showMap; }
     else if(state.safety.stage==='stopped'){title='Equipment contact / work stopped.';copy=state.safety.last.equipment+' contacted a crew member. All production is stopped. The game charges $25,000, a half-day review and 10 score points.';button='Secure site + start review';action=()=>{scene?.activity.regroup();C.recover(state);};}
@@ -180,7 +190,7 @@ function hud() {
     text('metric-cost', money(state.spent)); text('metric-budget', money(state.budget) + ' allowance' + (state.spent > state.budget ? ' / over allowance' : ''));
     text('metric-workers', (state.running ? workers : 0) + ' / ' + payroll); text('metric-active', a.active.length + (state.running ? ' active work fronts' : ' ready work fronts'));
     const w = C.weather(state); text('weather-label', w.name); text('weather-next', 'Scenario weather changes in ' + w.ends.toFixed(1) + ' days.');
-    for (const t of C.plan(state.site)) {
+    for (const t of C.plan(state)) {
         const ts = state.tasks[t.id], r = taskRows.get(t.id), status = a.reasons[t.id]; r.row.dataset.status = status;
         r.row.querySelector('.work-state span').textContent = status === 'Working' ? (state.running ? (t.reachWork?C.workPhase(state,t).label:'Working') : 'Ready / project paused') : status==='Curing / test wait' ? (state.running ? status : 'Curing clock paused') : status;
         r.row.querySelector('.work-state small').textContent = ts.start !== null ? 'Started day ' + Math.floor(ts.start) + (ts.finish !== null ? ' / accepted day ' + Math.ceil(ts.finish) : '') : (t.elapsed ? 'No crew assigned / elapsed time' : C.TRADES[C.workPhase(state,t).trade||t.trade].people + ' people') + ' / ' + (t.equipment ? C.EQUIPMENT[t.equipment].name : 'Field team');
@@ -230,8 +240,20 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) pause
 $('reset-campus').addEventListener('click', () => {
     if (!state) return; state = C.create(state.site); storageBlocked = false; readSave(state.site); notice(''); dirty = true; buildBoard(); scene?.configure(state); hud(); save();
 });
+$('apply-site-model').addEventListener('click',()=>{
+    if(!state||state.modelRevision===2||storageBlocked)return;
+    pause();
+    if(storageBlocked)return;
+    try{
+        const key=prefix+state.site,raw=localStorage.getItem(key);
+        if(raw!==knownSaves.get(state.site))throw Error('Another tab changed this save. Reload before applying the model.');
+        if(raw&&!localStorage.getItem(key+':before-site-model'))localStorage.setItem(key+':before-site-model',raw);
+    }catch(error){notice('The original layout could not be backed up. '+error.message);return;}
+    state.modelRevision=2;dirty=true;buildBoard();scene?.configure(state);hud();save();
+    notice('Researched layout applied. All quantities, costs, deliveries and inspection releases are retained. The original layout is backed up on this device.');
+});
 $('export-record').addEventListener('click', () => {
-    const data = { notice: 'Illustrative game scenario, not a project estimate or engineering record.', project: C.site(state.site), report: C.report(state), workPackages: C.plan(state.site).map(t => ({ ...t, ...state.tasks[t.id] })), state };
+    const data = { notice: 'Illustrative game scenario, not a project estimate or engineering record.', project: C.site(state.site), siteModel: {revision:state.modelRevision,...C.model(state),checked:C.MODELS.checked}, report: C.report(state), workPackages: C.plan(state).map(t => ({ ...t, ...state.tasks[t.id] })), state };
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = 'jobsite-' + state.site + '-record.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 function loop(now) {

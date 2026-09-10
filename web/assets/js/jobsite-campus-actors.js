@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { clamp, mix, smooth, cycle, earthCycle, earthHeight, earthProfile, trenchStages, trenchX, trenchDepth, foundationDepth, armAngles, parkingBay, arrivalPose, workLocation, pedestrianRoute, pathPoint, roadPoint } from './jobsite-campus-activity.mjs';
+import { clamp, mix, smooth, cycle, earthCycle, earthHeight, earthProfile, trenchStages, trenchX, trenchDepth, frontFoundationDepth, armAngles, parkingBay, arrivalPose, workLocation, pedestrianRoute, pathPoint, roadPoint } from './jobsite-campus-activity.mjs';
 import { PedestrianNetwork, closestPoint, sweptDistance } from './jobsite-campus-spatial.mjs';
 import { deliveryPose } from './jobsite-campus-logistics.mjs';
 const C = window.JobsiteCampus;
@@ -31,11 +31,13 @@ export class CampusActivity {
         this.rod = this.group();view.box([.09,3,.09],[0,1.5,0],0xf2e1c0,this.rod);
         for(let y=.25;y<3;y+=.5)view.box([.1,.18,.1],[0,y,0],0xb94f32,this.rod);
         this.erosion=this.group();for(let i=0;i<30;i++){view.box([4.8,.7,.08],[-72+i*5,.2,58],0x473f33,this.erosion);}
-        this.cureSigns=view.halls.map(h=>({key:h.key,sign:this.label('CURING / TEST WAIT',h.g.position.x,17,17)}));
+        this.cureSigns=view.halls.map(h=>({key:h.key,sign:this.label('CURING / TEST WAIT',h.g.position.x,h.g.position.z+18*h.g.scale.z,17)}));
         this.testRig=this.group();for(let i=0;i<3;i++){const unit=this.group(this.testRig,-9+i*3,0,-31);view.box([2,2,1.3],[0,1,0],0x657076,unit);view.box([1.5,.8,.06],[0,1.3,.7],0x24343a,unit);view.beam([0,.1,0],[0,.1,-4],.08,0x32302b,unit);}
         this.testSign=this.label('SYSTEM VERIFICATION',-6,-28,15);
         this.buildRoadWork(); this.update(state, 0, C.allocation(state).active);
     }
+    workLocation(task,p,worker=0) { return workLocation(task,p,worker,this.v.model); }
+    roadPoint(p) { return roadPoint(p,this.v.model); }
     group(parent = this.v.root, x = 0, y = 0, z = 0) { return this.v.group(parent,x,y,z); }
     label(text, x, z, width = 14) {
         const c=document.createElement('canvas');c.width=512;c.height=96;const ctx=c.getContext('2d');
@@ -62,7 +64,7 @@ export class CampusActivity {
     }
     buildRoadWork() {
         this.roadTiles=Array.from({length:64},(_,i)=>{
-            const p=roadPoint((i+.5)/64),q=roadPoint(Math.min(1,(i+.501)/64));const tile=this.v.box([7,.13,7.8],[p[0],.025,p[2]],0x928978);tile.rotation.y=Math.atan2(q[0]-p[0],q[2]-p[2]);return tile;
+            const p=this.roadPoint((i+.5)/64),q=this.roadPoint(Math.min(1,(i+.501)/64));const tile=this.v.box([7,.13,7.8],[p[0],.025,p[2]],0x928978);tile.rotation.y=Math.atan2(q[0]-p[0],q[2]-p[2]);return tile;
         });
         this.dust=new THREE.InstancedMesh(new THREE.SphereGeometry(.35,5,4),new THREE.MeshBasicMaterial({color:0xc3af84,transparent:true,opacity:.24,depthWrite:false}),18);this.dust.frustumCulled=false;this.v.root.add(this.dust);this.dustMatrix=new THREE.Object3D();
     }
@@ -139,8 +141,8 @@ export class CampusActivity {
                 const a=earthCycle(p,lane),b=earthCycle(next,lane);add('Haul truck '+(lane+1),a.truck,b.truck,2.5);add('Excavator '+(lane+1),a.machine,b.machine,2.4);
             }
             else if(task.equipment==='earth'){
-                if(task.id.endsWith('-prep')){const a=workLocation(task,p),b=workLocation(task,next);add('Foundation excavator',[a[0]+6,0,a[2]],[b[0]+6,0,b[2]],2.4);}
-                else add('Dozer',roadPoint(p),roadPoint(next),2.7);
+                if(task.id.endsWith('-prep')){const a=this.workLocation(task,p),b=this.workLocation(task,next);add('Foundation excavator',[a[0]+6,0,a[2]],[b[0]+6,0,b[2]],2.4);}
+                else add('Dozer',this.roadPoint(p),this.roadPoint(next),2.7);
             }
             if(task.reachWork){const z=task.id==='duct'?33.5:30,a=trenchStages(p),b=trenchStages(next);add('Utility excavator',[trenchX(a.dig),0,z-6],[trenchX(b.dig),0,z-6],2.4);add('Backfill backhoe',[trenchX(a.fill)-2,0,z-6],[trenchX(b.fill)-2,0,z-6],2.2);}
             if(task.equipment==='crane'){
@@ -219,7 +221,7 @@ export class CampusActivity {
             if(person.crew>=s.crews[person.trade])continue;
             person.car=Math.min(31,Math.floor(employee++/4));const task=assigned[person.trade]?.[person.crew];const arrived=arrivalPose(person.car,s.day).parked || person.trade==='survey';
             if(!arrived)continue;
-            let target=task?workLocation(task,progress(s,task.id),person.member):[-48+person.id%13*2.4,0,45+Math.floor(person.id%39/13)*2.1];
+            let target=task?this.workLocation(task,progress(s,task.id),person.member):[-48+person.id%13*2.4,0,45+Math.floor(person.id%39/13)*2.1];
             if(task){target=[target[0]+(person.member%3-1)*1.1,target[1],target[2]+Math.floor(person.member/3)*1.1];if(task.id==='grade'){const e=this.earth[person.member%2];if(person.member<2)target=[e.machine[0]+.8,1.7,e.machine[2]-.6];else if(person.member<4)target=[e.truck[0],.2,e.truck[2]-2];}}
             const seated=task?.id==='grade'&&person.member<4;person.seated=seated;
             if(seated){person.position=target.slice();person.target=target.slice();person.route=null;person.key=task.id;}
@@ -243,7 +245,7 @@ export class CampusActivity {
         const grade=progress(s,'grade'),drain=progress(s,'drain'),duct=progress(s,'duct'),a=progress(s,'a-prep'),b=progress(s,'b-prep'),ap=progress(s,'a-slab'),bp=progress(s,'b-slab'),key=[grade,drain,duct,a,b,ap,bp].map(p=>p.toFixed(3)).join(':');if(key===this.terrainKey)return;this.terrainKey=key;
         const vertices=this.terrain.geometry.attributes.position,profile=earthProfile(grade);
         if(!this.terrainWeights)this.terrainWeights=Array.from({length:vertices.count},(_,i)=>profile.map(c=>[Math.exp(-((vertices.getX(i)-c.cut[0])**2/75+(vertices.getZ(i)-c.cut[1])**2/30))*1.8,Math.exp(-((vertices.getX(i)-c.fill[0])**2/100+(vertices.getZ(i)-c.fill[1])**2/36))*1.05]));
-        for(let i=0;i<vertices.count;i++){const x=vertices.getX(i),z=vertices.getZ(i),height=profile.reduce((h,c,j)=>h+this.terrainWeights[i][j][0]*c.cutRemaining-this.terrainWeights[i][j][1]*c.fillRemaining,-.08);vertices.setY(i,height+trenchDepth(x,z,drain,30)+trenchDepth(x,z,duct,33.5)+foundationDepth(x,z,a,ap,-28)+foundationDepth(x,z,b,bp,30));}
+        for(let i=0;i<vertices.count;i++){const x=vertices.getX(i),z=vertices.getZ(i),height=profile.reduce((h,c,j)=>h+this.terrainWeights[i][j][0]*c.cutRemaining-this.terrainWeights[i][j][1]*c.fillRemaining,-.08);vertices.setY(i,height+trenchDepth(x,z,drain,30)+trenchDepth(x,z,duct,33.5)+frontFoundationDepth(x,z,a,ap,this.v.model.fronts[0])+frontFoundationDepth(x,z,b,bp,this.v.model.fronts[1]));}
         vertices.needsUpdate=true;this.terrain.geometry.computeVertexNormals();this.terrain.geometry.computeBoundingSphere();
     }
     update(s,dt,active) {
@@ -252,9 +254,9 @@ export class CampusActivity {
         this.active=active;this.terrainUpdate(s);const v=this.v;
         const earthTask=active.find(t=>t.equipment==='earth'),trenchTask=active.find(t=>t.reachWork);
         this.earth=[earthCycle(progress(s,'grade'),0),earthCycle(progress(s,'grade'),1)];
-        this.excavators.forEach((m,i)=>{const e=this.earth[i],working=earthTask?.id==='grade';m.g.visible=s.equipment.earth>0;if(i===0&&earthTask?.id.endsWith('-prep')){const p=workLocation(earthTask,progress(s,earthTask.id)),f=(progress(s,earthTask.id)*10)%1;this.poseExcavator(m,[p[0]+6,0,p[2]],[p[0],-Math.sin(f*Math.PI)*.8,p[2]],f>.3&&f<.7);return;}this.poseExcavator(m,working?[e.machine[0],earthHeight(e.machine[0],e.machine[2],progress(s,'grade')),e.machine[2]]:[57+i*7,0,34],working?e.bucket:[53+i*7,1,30],working&&e.soil,e.phase>.43&&e.phase<.5?-.8:0);});
+        this.excavators.forEach((m,i)=>{const e=this.earth[i],working=earthTask?.id==='grade';m.g.visible=s.equipment.earth>0;if(i===0&&earthTask?.id.endsWith('-prep')){const p=this.workLocation(earthTask,progress(s,earthTask.id)),f=(progress(s,earthTask.id)*10)%1;this.poseExcavator(m,[p[0]+6,0,p[2]],[p[0],-Math.sin(f*Math.PI)*.8,p[2]],f>.3&&f<.7);return;}this.poseExcavator(m,working?[e.machine[0],earthHeight(e.machine[0],e.machine[2],progress(s,'grade')),e.machine[2]]:[57+i*7,0,34],working?e.bucket:[53+i*7,1,30],working&&e.soil,e.phase>.43&&e.phase<.5?-.8:0);});
         this.trucks.forEach((truck,i)=>{truck.g.visible=s.equipment.earth>0;const e=this.earth[i%2],working=earthTask?.id==='grade'&&i<2;const point=working?e.truck:[57+(i%2)*7,0,17+Math.floor(i/2)*10];const ahead=working?earthCycle(Math.min(1,progress(s,'grade')+.0002),i%2).truck:null;if(working)point[1]=earthHeight(point[0],point[2],progress(s,'grade'));this.placeVehicle(truck,point,ahead);truck.bed.rotation.x=working?e.tip:0;truck.load.visible=working&&e.payload>0;});
-        [...this.dozers,this.roller].forEach((m,i)=>{m.g.visible=s.equipment.earth>0;if(earthTask?.id==='grade'){const e=this.earth[i%2];const pass=clamp((e.phase-.74)/.26);m.g.position.set(e.fillPoint[0]-6+pass*12,0,e.fillPoint[1]+(i===2?9:1));m.g.position.y=earthHeight(m.g.position.x,m.g.position.z,progress(s,'grade'));m.g.rotation.y=-Math.PI/2;m.dirt.visible=e.phase>.73&&e.phase<.92&&i<2;}else if(earthTask?.id.endsWith('-prep')){const p=workLocation(earthTask,progress(s,earthTask.id));m.g.position.set(p[0]-6-i*4,0,p[2]+4);m.dirt.visible=false;}else if(earthTask){const p=clamp(progress(s,earthTask.id)-i*.015),a=roadPoint(p),b=roadPoint(Math.min(1,p+.002));this.placeVehicle(m,a,b);m.dirt.visible=i<2&&earthTask.id==='clear';}else{m.g.position.set(57+i*6,0,45);m.dirt.visible=false;}});
+        [...this.dozers,this.roller].forEach((m,i)=>{m.g.visible=s.equipment.earth>0;if(earthTask?.id==='grade'){const e=this.earth[i%2];const pass=clamp((e.phase-.74)/.26);m.g.position.set(e.fillPoint[0]-6+pass*12,0,e.fillPoint[1]+(i===2?9:1));m.g.position.y=earthHeight(m.g.position.x,m.g.position.z,progress(s,'grade'));m.g.rotation.y=-Math.PI/2;m.dirt.visible=e.phase>.73&&e.phase<.92&&i<2;}else if(earthTask?.id.endsWith('-prep')){const p=this.workLocation(earthTask,progress(s,earthTask.id));m.g.position.set(p[0]-6-i*4,0,p[2]+4);m.dirt.visible=false;}else if(earthTask){const p=clamp(progress(s,earthTask.id)-i*.015),a=this.roadPoint(p),b=this.roadPoint(Math.min(1,p+.002));this.placeVehicle(m,a,b);m.dirt.visible=i<2&&earthTask.id==='clear';}else{m.g.position.set(57+i*6,0,45);m.dirt.visible=false;}});
         this.roadTiles.forEach((tile,i)=>{tile.visible=i/64<progress(s,'clear');tile.material=v.mat(i/64<progress(s,'roads')?0x44494b:0x928978);});
         this.erosion.children.forEach((m,i)=>m.visible=i/30<progress(s,'controls'));
         this.cureSigns.forEach(({key,sign})=>sign.visible=C.done(s,key+'-slab')&&!C.done(s,key+'-strength'));
@@ -262,21 +264,21 @@ export class CampusActivity {
         this.updateTrench(s,trenchTask);this.updatePumps(s,active);this.updateLifts(s,active);
         const cars=Math.min(32,Math.ceil(Object.entries(s.crews).reduce((n,[k,c])=>n+c*C.TRADES[k].people,0)/4));let parked=0;
         this.cars.forEach((car,i)=>{const pose=arrivalPose(i,s.day);car.g.visible=i<cars&&(pose.visible||s.day>1.5);if(car.g.visible){const ahead=arrivalPose(i,s.day+.001).position;this.placeVehicle(car,pose.position,ahead);if(pose.parked){car.g.rotation.y=i<16?0:Math.PI;parked++;}}});this.parkedCount=parked;
-        const survey=active.find(t=>t.trade==='survey');this.survey.visible=this.rod.visible=!!survey;if(survey){const p=workLocation(survey,progress(s,survey.id));this.survey.position.set(p[0]-2,0,p[2]);this.rod.position.set(p[0]+5,0,p[2]-4);}
+        const survey=active.find(t=>t.trade==='survey');this.survey.visible=this.rod.visible=!!survey;if(survey){const p=this.workLocation(survey,progress(s,survey.id));this.survey.position.set(p[0]-2,0,p[2]);this.rod.position.set(p[0]+5,0,p[2]-4);}
         this.updatePeople(s,dt,active);
         const dustActive=s.running&&earthTask?.id==='grade';this.dust.visible=dustActive;if(dustActive)for(let i=0;i<18;i++){const e=this.earth[i%2],a=(this.clock*.8+i*.37)%1;this.dustMatrix.position.set(e.truck[0]+Math.sin(i)*1.5,.4+a*2,e.truck[2]+a*4);this.dustMatrix.scale.setScalar(.3+a);this.dustMatrix.updateMatrix();this.dust.setMatrixAt(i,this.dustMatrix.matrix);}this.dust.instanceMatrix.needsUpdate=true;
-        const focusTask=active[this.workIndex%Math.max(1,active.length)];this.focus=focusTask?workLocation(focusTask,progress(s,focusTask.id)):[-40,0,77];
+        const focusTask=active[this.workIndex%Math.max(1,active.length)];this.focus=focusTask?this.workLocation(focusTask,progress(s,focusTask.id)):[-40,0,77];
         if(focusTask?.id==='grade'){const e=this.earth[0];this.focus=e.phase>.5?e.truck.slice():[e.machine[0]+3,0,e.machine[2]+3];}
-        if(focusTask&&(focusTask.equipment==='crane'||focusTask.equipment==='pump')&&['a','b'].includes(focusTask.zone)){this.focus=[(focusTask.zone==='a'?-28:30)+5,focusTask.equipment==='crane'?5:0,this.focus[2]];}
+        if(focusTask&&(focusTask.equipment==='crane'||focusTask.equipment==='pump')&&['a','b'].includes(focusTask.zone)){this.focus=[this.v.model.fronts.find(f=>f.key===focusTask.zone).x+5,focusTask.equipment==='crane'?5:0,this.focus[2]];}
         if(focusTask?.equipment==='crane'){const job=this.v.craneAssignment(focusTask,s);if(job){const pose=deliveryPose(job.p,job.group.children.length,job.base,job.target);this.focus=pose.carried?pose.vehicle:pose.cargo;}}
-        const curing=C.allocation(s).passive; if(!focusTask&&curing.length)this.focus=workLocation(curing[0],0);
+        const curing=C.allocation(s).passive; if(!focusTask&&curing.length)this.focus=this.workLocation(curing[0],0);
         this.focusTask=focusTask;this.title=focusTask?focusTask.name:curing.length?'Concrete curing / awaiting test evidence':s.day<1.5?'Morning mobilization':'Crews at the site compound';
         this.detail=focusTask?.id==='grade'?this.earth[0].label:trenchTask&&focusTask===trenchTask?C.workPhase(s,trenchTask).label:focusTask?.equipment==='crane'?this.materialDetail(s,focusTask):focusTask?.equipment==='pump'?'Place concrete / finish / release the pump':focusTask?'Assigned crews at the work front':curing.length?'Elapsed wait / foundation release still required':'Park, check in and walk to the work area';
         v.canvas.dataset.visibleWorkers=this.workerCount;v.canvas.dataset.walkingWorkers=this.walkingCount;v.canvas.dataset.parkedCars=this.parkedCount;v.canvas.dataset.activityPhase=this.clock.toFixed(3);v.canvas.dataset.terrainVersion=this.terrainKey;
     }
     materialDetail(s,task) { const job=this.v.craneAssignment(task,s);return job?job.c.installed+'/'+job.group.children.length+' pieces placed / '+job.c.label:'Materials at the work front'; }
     updateTrench(s,task) {
-        const v=this.v,front=task||C.plan(s.site).find(t=>t.reachWork&&s.tasks[t.id].started&&progress(s,t.id)<1),p=front?progress(s,front.id):1,z=front?.id==='duct'?33.5:30,st=trenchStages(p),phase=(p*6)%1;
+        const v=this.v,front=task||C.plan(s).find(t=>t.reachWork&&s.tasks[t.id].started&&progress(s,t.id)<1),p=front?progress(s,front.id):1,z=front?.id==='duct'?33.5:30,st=trenchStages(p),phase=(p*6)%1;
         const dig=trenchX(st.dig),pipe=trenchX(st.pipe),fill=trenchX(st.fill);const working=!!front,installing=!!task&&phase<.5,backfilling=!!task&&phase>=.6&&phase<.92;
         this.utilityExcavator.g.visible=this.backhoe.g.visible=s.equipment.trench>0;
         this.poseExcavator(this.utilityExcavator,working?[dig,0,z-6]:[-61,0,42],working?[dig,installing?mix(.2,-1.3,Math.sin(phase*2*Math.PI)**2):1.4,z]:[-57,1,38],installing&&phase>.15&&phase<.4);
@@ -292,13 +294,13 @@ export class CampusActivity {
         const from=new THREE.Vector3(...a),to=new THREE.Vector3(...b),delta=to.clone().sub(from);mesh.position.copy(from.add(to).multiplyScalar(.5));mesh.scale.set(1,1,delta.length());mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1),delta.normalize());
     }
     updatePumps(s,active) {
-        const tasks=active.filter(t=>t.equipment==='pump');
-        this.pumps.forEach((p,i)=>{p.truck.g.visible=p.mixer.g.visible=i<tasks.length;if(!tasks[i])return;const task=tasks[i],amount=progress(s,task.id),target=workLocation(task,amount),x=task.zone==='a'?-2:task.zone==='b'?57:target[0]+7;this.placeVehicle(p.truck,[x,0,target[2]],null);this.placeVehicle(p.mixer,[x+1,0,target[2]+8],null);p.drum.rotation.z=this.clock*.8;
+        const v=this.v,tasks=active.filter(t=>t.equipment==='pump');
+        this.pumps.forEach((p,i)=>{p.truck.g.visible=p.mixer.g.visible=i<tasks.length;if(!tasks[i])return;const task=tasks[i],amount=progress(s,task.id),target=this.workLocation(task,amount),front=v.model.fronts.find(f=>f.key===task.zone),x=front?front.x+front.width/2+6:target[0]+7;this.placeVehicle(p.truck,[x,0,target[2]],null);this.placeVehicle(p.mixer,[x+1,0,target[2]+8],null);p.drum.rotation.z=this.clock*.8;
             const local=[target[0]-x,.8,0],points=[[0,3,0],[0,13,-3],[local[0]/2,15,0],[local[0],6,0]];p.arms.forEach((arm,j)=>this.setBeam(arm,points[j],points[j+1]));p.hose.position.set(local[0],3.4,0);p.hose.scale.y=5.2;p.boom.visible=amount>.25;
         });
     }
     updateLifts(s,active) {
-        const tasks=active.filter(t=>t.equipment==='lift');this.lifts.forEach((lift,i)=>{const task=tasks[Math.floor(i/2)];lift.g.visible=!!task;if(!task)return;const p=workLocation(task,progress(s,task.id),i),height=C.site(s.site).type==='fab'?10:6;lift.g.position.set(p[0]+(i%2?4:-4),0,p[2]);lift.platform.position.y=height;lift.arm.scale.y=height/5;lift.arm.position.y=height/2;});
+        const tasks=active.filter(t=>t.equipment==='lift');this.lifts.forEach((lift,i)=>{const task=tasks[Math.floor(i/2)];lift.g.visible=!!task;if(!task)return;const p=this.workLocation(task,progress(s,task.id),i),height=C.site(s.site).type==='fab'?10:6;lift.g.position.set(p[0]+(i%2?4:-4),0,p[2]);lift.platform.position.y=height;lift.arm.scale.y=height/5;lift.arm.position.y=height/2;});
     }
     dispose() { for(const label of this.labels||[]){label.texture.dispose();label.material.dispose();}this.dust.material.dispose(); }
 }

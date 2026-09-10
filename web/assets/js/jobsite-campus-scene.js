@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { buildCampusContext, updateCampusContext } from './jobsite-campus-context.js';
 import { CampusActivity } from './jobsite-campus-actors.js';
 import { clamp, cycle, mix, smooth, workLocation } from './jobsite-campus-activity.mjs';
 import { PedestrianNetwork, wallPanels } from './jobsite-campus-spatial.mjs';
@@ -19,7 +20,7 @@ export class CampusScene {
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(42, 1, .1, 1800);
         this.controls = new OrbitControls(this.camera, canvas);
-        this.controls.enableDamping = true; this.controls.minDistance = 35; this.controls.maxDistance = 300;
+        this.controls.enableDamping = true; this.controls.minDistance = 35; this.controls.maxDistance = 520;
         this.controls.maxPolarAngle = Math.PI / 2 - .05;
         this.controls.target.set(0, 2, 0);
         this.controls.addEventListener('start', () => { this.followWork = false; this.canvas.dispatchEvent(new CustomEvent('campuscamera', { detail: 'free' })); });
@@ -61,6 +62,7 @@ export class CampusScene {
     setCamera(name) {
         this.followWork = name === 'work';
         if (this.followWork) return;
+        if(name==='campus'){this.camera.position.set(200,215,245);this.controls.target.set(0,0,-45);this.controls.update();return;}
         if (name === 'parking') { this.camera.position.set(4, 35, 129); this.controls.target.set(-37, 0, 82); this.controls.update(); return; }
         this.camera.position.set(...({ site: [122, 104, 148], overhead: [0, 200, 1], detail: [67, 34, 52] }[name] || [122, 104, 148]));
         this.controls.target.set(0, 2, 0); this.controls.update();
@@ -75,21 +77,22 @@ export class CampusScene {
         this.activity?.dispose();
         if (this.root) { this.root.traverse(o => { o.geometry?.dispose(); }); this.scene.remove(this.root); }
         this.navigationKey = ''; this.navigation = new PedestrianNetwork();
-        this.state = state; this.root = new THREE.Group(); this.scene.add(this.root);
+        this.state = state; this.model=C.model(state); this.root = new THREE.Group(); this.scene.add(this.root);
         const p = C.site(state.site), coast = p.biome === 'coast', desert = p.biome === 'desert';
-        this.scene.background = new THREE.Color(coast ? 0xbad5db : 0xc0d0d9); this.scene.fog = new THREE.Fog(this.scene.background, 270, 750);
+        if(coast)this.scene.environment=null;
+        this.scene.background = new THREE.Color(coast ? 0xbad5db : 0xc0d0d9); this.scene.fog = new THREE.Fog(this.scene.background, state.modelRevision===2?480:270, state.modelRevision===2?1300:750);
         for (const z of [-405.5, 405.5]) this.box([1500, 1, 689], [0, -.6, z], 0x868975).material = this.surroundMaterial;
         for (const x of [-413.5, 413.5]) this.box([673, 1, 122], [x, -.6, 0], 0x868975).material = this.surroundMaterial;
-        this.surroundMaterial.color.setHex(desert ? 0xb3a58b : coast ? 0x939c8b : 0x939884);
+        this.surroundMaterial.color.setHex(desert ? 0xb3a58b : coast ? 0xb3ac8f : 0x939884);
         this.box([154, 1, 122], [0, -2.6, 0], 0x9e8d6e).material = this.groundMaterial;
         if (coast) {
-            const water = this.shape(new THREE.PlaneGeometry(900, 1500), 0x6aadb6, [-600, -.5, 0], this.root, .25);
+            const water = this.shape(new THREE.PlaneGeometry(900, 1500), 0x6aadb6, [625, .035, 0], this.root, .25);
             water.rotation.x = -Math.PI / 2; water.castShadow = false;
         }
         // Deterministic landscape silhouettes, independent of the construction quantities.
         for (let i = 0; i < 24; i++) {
             const a = i * 2.39996, r = 310 + i % 4 * 35;
-            if (p.biome === 'forest') for (let j = 0; j < 7; j++) {
+            if (p.biome === 'forest' && state.modelRevision!==2) for (let j = 0; j < 7; j++) {
                 const x = Math.cos(a) * (140 + j * 15), z = Math.sin(a) * (125 + j * 12);
                 this.cyl(.6, 7, [x, 2.5, z], 0x675b44);
                 this.shape(new THREE.ConeGeometry(3.5, 11, 7), j % 2 ? 0x4c6252 : 0x5a715b, [x, 10, z]);
@@ -103,7 +106,7 @@ export class CampusScene {
             this.box([10, 3, 4], [0, 1.5, 0], 0xc7c4b7, g); this.box([10.3, .2, 4.3], [0, 3.1, 0], 0xe0ddd0, g);
             for (const x of [-3, 0, 3]) this.box([1.4, 1, .1], [x, 1.9, 2.05], 0x355760, g);
         }
-        this.halls = ['a', 'b'].map((key, i) => this.buildHall(key, i ? 30 : -28, p.type));
+        this.halls = this.model.fronts.map(f => this.buildHall(f.key, f.x, p.type, f));
         this.power = this.group(this.root, -41, 0, -38); this.cooling = this.group(this.root, 32, 0, -38);
         this.plantPads={power:this.group(this.root,-41,0,-38),cooling:this.group(this.root,32,0,-38)};
         for (let i = 0; i < 6; i++) {
@@ -112,16 +115,23 @@ export class CampusScene {
             const gear=this.group(this.power,x,0,z),cooler=this.group(this.cooling,x,0,z);
             this.box([3.3, 3.3, 3.5], [0, 2, 0], 0x7c8e8c, gear, .5);
             for (let j = 0; j < 3; j++) this.cyl(.22, 1.1, [-1+j, 4, 0], 0x605c55, gear);
-            this.box([5, 2.5, 5], [0, 1.5, 0], 0xc3c9c6, cooler, .4);
-            for (const dx of [-1.3, 1.3]) { this.cyl(.95, .18, [dx, 2.85, 0], 0x343e40, cooler, 20); this.box([1.8, .1, .12], [dx, 2.98, 0], 0x819190, cooler); }
+            if(p.type==='space'&&state.modelRevision===2){
+                this.cyl(2,4,[0,2.3,0],0xc9cebf,cooler,16);
+                this.box([1.2,1,2.5],[2,.8,0],0x637e80,cooler);
+                const pipe=this.cyl(.18,4,[0,.8,0],0x9caeac,cooler);pipe.rotation.z=Math.PI/2;
+            }else{
+                this.box([5, 2.5, 5], [0, 1.5, 0], 0xc3c9c6, cooler, .4);
+                for (const dx of [-1.3, 1.3]) { this.cyl(.95, .18, [dx, 2.85, 0], 0x343e40, cooler, 20); this.box([1.8, .1, .12], [dx, 2.98, 0], 0x819190, cooler); }
+            }
         }
         this.cranes = Array.from({ length: 3 }, () => this.buildCrane());
         this.activity = new CampusActivity(this, state);
         this.cranes.forEach(crane => { crane.carrier=this.activity.truck(); crane.carrier.bed.visible=false; this.box([3.5,.25,8],[0,1.1,1],0x707773,crane.carrier.g); });
         this.stock=this.group(); this.box([15,.08,12],[5,.03,48],0x817660,this.stock); this.activity.label('MATERIAL LAYDOWN',6,55,14);
         this.stockPieces=Array.from({length:15},(_,i)=>this.box([.55,.55,10],[i%5*1.2+2,.5+Math.floor(i/5)*.6,48],0x879a9b,this.stock,.6));
+        buildCampusContext(this,state);
         this.setCamera('site'); this.resize(); this.render(state, 0);
-        this.textureLoader.load('/assets/jobsite/' + (coast ? 'desert' : p.biome) + '.jpg', texture => {
+        if(!coast)this.textureLoader.load('/assets/jobsite/' + p.biome + '.jpg', texture => {
             if (token !== this.assetToken) { texture.dispose(); return; }
             this.sky?.dispose(); this.environment?.dispose(); this.sky = texture;
             texture.mapping = THREE.EquirectangularReflectionMapping; texture.colorSpace = THREE.SRGBColorSpace;
@@ -129,8 +139,9 @@ export class CampusScene {
             this.scene.environment = this.environment.texture; this.scene.environmentIntensity = .35;
         });
     }
-    buildHall(key, x, type) {
-        const g = this.group(this.root, x, 0, -3), height = type === 'space' ? key === 'a' ? 52 : 24 : type === 'fab' ? 14 : 10;
+    buildHall(key, x, type, footprint) {
+        const modern=this.state.modelRevision===2,g = this.group(this.root, x, 0, footprint.z), height = modern?footprint.height:type === 'space' ? key === 'a' ? 52 : 24 : type === 'fab' ? 14 : 10;
+        g.scale.set(footprint.width/40,1,footprint.depth/44);
         const slab = this.group(g);
         for (let i = 0; i < 10; i++) this.box([43, .6, 4.75], [0, .25, -22 + i * 4.8], 0xbfbfb5, slab);
         const foundation = this.group(g);
@@ -144,14 +155,21 @@ export class CampusScene {
         }
         const doors=this.group(g);
         const frame = this.group(g), envelope = this.group(g), roof = this.group(g), fitout = this.group(g), mep = this.group(g);
-        if (type === 'space' && key === 'a') {
+        if (type === 'space' && (key === 'a'||modern)) {
             for (let y = 0; y < 52; y += 6.5) {
                 const level = this.group(frame, -8, y, 0);
                 for (const px of [-3, 3]) for (const z of [-3, 3]) this.box([.55, 6.5, .55], [px, 3.25, z], 0x69787c, level, .7);
                 for (const z of [-3, 3]) { this.beam([-3, 0, z], [3, 6.5, z], .23, 0x869292, level); this.box([7, .3, .6], [0, 6.5, z], 0x69787c, level); }
                 this.box([8, .3, 8], [-8, y + .8, 0], 0x939e9e, envelope);
             }
-            this.cyl(10, 1.2, [9, .8, 0], 0x92938c, fitout, 48);
+            const mount=this.group(fitout,9,0,0);
+            this.cyl(9,1.2,[0,.8,0],0x92938c,mount,32);
+            for(let i=0;i<6;i++){const a=i*Math.PI/3;this.box([1.1,5,1.1],[Math.cos(a)*5,3,Math.sin(a)*5],0x687577,mount,.6);}
+            const ring=this.shape(new THREE.TorusGeometry(5.5,.65,8,32),0xa9b4b2,[0,5.8,0],mount,.6);ring.rotation.x=Math.PI/2;
+            this.box([7,.6,14],[0,.8,8],0x5b6463,mount);
+            for(const side of [-1,1])this.box([1,2.5,14],[side*4,1.2,8],0xc1bfb3,mount);
+            for(let i=0;i<4;i++){const pipe=this.cyl(.22,30,[-5+i*.8,2.2,0],i%2?0xc3c5bd:0x789294,mep);pipe.rotation.x=Math.PI/2;}
+            for(const y of [20,36]){const access=this.group(envelope,-8,y,0);this.box([15,.5,1.2],[6,0,-3],0xb3b9b4,access);this.box([15,.5,1.2],[6,0,3],0xb3b9b4,access);}
             for (const z of [-16, 16]) this.box([30, .4, 2], [0, 2, z], 0x9ca5a2, envelope);
         } else {
             for (const z of [-22, -11, 0, 11, 22]) {
@@ -194,9 +212,10 @@ export class CampusScene {
         const hall=task&&this.halls.find(h=>task.id===h.key+'-frame');
         const group=hall?hall.frame:task?.id==='power'?this.power:task?.id==='cooling'?this.cooling:null;
         if(!group)return null;
-        const p=state.tasks[task.id].progress,c=installation(p,group.children.length),part=group.children[c.index],parent=hall?hall.g.position:group.position;
-        const target=[part.position.x+parent.x,part.position.y+parent.y,part.position.z+parent.z];
-        const base=hall?[hall.g.position.x+26,0,target[2]]:task.zone==='power'?[-14,0,-35]:[57,0,-35];
+        const p=state.tasks[task.id].progress,c=installation(p,group.children.length),part=group.children[c.index];
+        this.root.updateMatrixWorld(true);
+        const target=group.localToWorld(part.position.clone()).toArray();
+        const base=hall?[hall.g.position.x+hall.g.scale.x*20+6,0,target[2]]:task.zone==='power'?[-14,0,-43]:[57,0,-43];
         return {hall,group,p,c,part,target,base};
     }
     updateCrane(crane, task, state, index) {
@@ -205,7 +224,7 @@ export class CampusScene {
         if(!job){crane.g.position.set(60,0,35-index*10);crane.boom.visible=crane.cable.visible=crane.hook.visible=false;return;}
         const {p,c,part,target,base,group}=job,key=task.id+':'+c.index;
         if(crane.payloadKey!==key){
-            crane.payload.clear();const load=part.clone();load.position.set(0,0,0);load.visible=true;
+            crane.payload.clear();const load=part.clone();load.position.set(0,0,0);if(job.hall)load.scale.multiply(job.hall.g.scale);load.visible=true;
             const bounds=new THREE.Box3().setFromObject(load);crane.loadBottom=bounds.min.y;crane.loadTop=bounds.max.y;
             crane.carryRotation=new THREE.Quaternion();const size=bounds.getSize(new THREE.Vector3());
             if(size.y>7)crane.carryRotation.setFromAxisAngle(new THREE.Vector3(1,0,0),Math.PI/2);
@@ -262,6 +281,7 @@ export class CampusScene {
         this.updateNavigation(s);
         const steelRemaining=this.halls.reduce((n,h)=>n+h.frame.children.filter(p=>!p.visible).length,0);
         this.stockPieces?.forEach((p,i)=>p.visible=stateDelivered(s,'steel')&&i<Math.min(15,steelRemaining));
+        updateCampusContext(this,s);
         this.activity.update(s, dt, active);
         const lifting = active.filter(t => t.equipment === 'crane');
         this.cranes.forEach((crane, i) => this.updateCrane(crane, lifting[i], s, i));
@@ -272,6 +292,8 @@ export class CampusScene {
             this.camera.position.lerp(target.clone().add(offset), dt ? 1-Math.exp(-dt*2.5) : 1);
         }
         this.controls.update(); this.renderer.render(this.scene, this.camera);
+        this.canvas.dataset.siteModel=this.model.context;
+        this.canvas.dataset.modelRevision=s.modelRevision;
         this.canvas.dataset.drawCalls = this.renderer.info.render.calls;
         this.canvas.dataset.cameraFollow = String(!!this.followWork);
         this.canvas.dataset.renderMs=(performance.now()-renderStart).toFixed(1);

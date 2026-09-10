@@ -16,9 +16,16 @@ async function load(query){await new Promise(resolve=>{frame.onload=resolve;fram
  check('Upgraded project preserves day and spending and explains legacy credit',upgraded.day===old.day&&upgraded.spent===old.spent&&Object.keys(upgraded.tasks).length===44&&el('process-save-note').textContent.includes('Earlier progress retained'));
  await load('');el('mobilize-campus').click();await until(()=>!el('construction').hidden);
  check('Reload uses the updated save and retains the original backup',el('run-project').textContent==='Run project'&&Number(el('metric-day').textContent)===Math.floor(old.day)&&campusTestStorage.get(backup)===original);
+ await until(()=>Number(el('campus-canvas').dataset.drawCalls)>0);
+ check('Older structures keep their original layout until an explicit upgrade',el('campus-canvas').dataset.modelRevision==='1'&&!el('apply-site-model').hidden);
+ const originalLayout=campusTestStorage.get(key),oldLayout=JSON.parse(originalLayout);el('apply-site-model').click();
+ await until(()=>el('campus-canvas').dataset.modelRevision==='2');const newLayout=JSON.parse(campusTestStorage.get(key));
+ check('Applying the researched layout backs up the original and retains all work',campusTestStorage.get(key+':before-site-model')===originalLayout&&newLayout.spent===oldLayout.spent&&JSON.stringify(newLayout.tasks)===JSON.stringify(oldLayout.tasks));
+ await load('');el('mobilize-campus').click();await until(()=>Number(el('campus-canvas').dataset.drawCalls)>0);
+ check('The selected layout survives reload',el('campus-canvas').dataset.modelRevision==='2'&&el('apply-site-model').hidden);
  await load('legacy=true&storage-blocked=true');campusTestStorage.delete(backup);const beforeFailure=campusTestStorage.get(key);
  el('mobilize-campus').click();await until(()=>el('storage-status').textContent.includes('unavailable'));
  check('A failed backup preserves the old save and reports storage failure',campusTestStorage.get(key)===beforeFailure&&!campusTestStorage.has(backup)&&!el('process-save-note').textContent.includes('is backed up'));
- document.querySelector('#status').textContent='PASS: all four save upgrade checks';
+ document.querySelector('#status').textContent='PASS: all seven save upgrade checks';
 }catch(error){document.querySelector('#status').textContent='FAIL: '+error.message;}})();
 </script>

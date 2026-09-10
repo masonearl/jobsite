@@ -72,7 +72,7 @@ export function arrivalPose(index, day) {
     const route = [[100, 0, 111], [-2, 0, 111], [-2, 0, 84], [bay[0], 0, 84], bay];
     return { position: pathPoint(route, arrival), parked: arrival >= 1, visible: arrival > 0, arrival };
 }
-export function workLocation(task, progress, worker = 0) {
+function canonicalWorkLocation(task, progress, worker = 0) {
     if (task.id === 'survey') return [-53 + Math.sin(progress * Math.PI * 2) * 12, 0, 35 - progress * 50];
     if (task.id === 'clear' || task.id === 'controls') { const p=roadPoint(progress); return [p[0]+4,0,p[2]+4]; }
     if (task.id === 'grade') { const p = earthCycle(progress); return [p.cutPoint[0] - 2, 0, p.cutPoint[1] + 10]; }
@@ -88,6 +88,16 @@ export function workLocation(task, progress, worker = 0) {
     if(task.id.endsWith('-pad')){const cell=Math.min(5,Math.floor(progress*6));return[(task.zone==='power'?-41:32)+(cell%3)*7,0,-38+Math.floor(cell/3)*8];}
     return { utilities:[0,0,30], power:[-35,0,-34], cooling:[39,0,-34], access:[-47,0,45], yard:[-3,0,25] }[task.zone] || [0,0,25];
 }
+// Workstations and foundation cuts share the same transform as the rendered footprint.
+export function workLocation(task, progress, worker=0, model=null) {
+    const p=canonicalWorkLocation(task,progress,worker),front=model?.fronts.find(f=>f.key===task.zone);
+    if(front){const oldX=task.zone==='a'?-28:30;return [front.x+(p[0]-oldX)*front.width/40,p[1],front.z+(p[2]+3)*front.depth/44];}
+    if(model&&['clear','controls','roads'].includes(task.id)){const road=roadPoint(progress,model);return[road[0]+4,0,road[2]+4];}
+    return p;
+}
+export function frontFoundationDepth(x,z,prep,pour,front) {
+    return foundationDepth((x-front.x)*40/front.width,(z-front.z)*44/front.depth-3,prep,pour,0);
+}
 // Pedestrians use the southern walkway before entering a work front, avoiding completed halls.
 export function pedestrianRoute(from, to) {
     if (Math.hypot(from[0]-to[0], from[2]-to[2]) < 10) return [from.slice(), to.slice()];
@@ -97,7 +107,7 @@ export function pedestrianRoute(from, to) {
     if (from[2] > 60) path.splice(path.length-3,1);
     return path;
 }
-export const roadPoint = progress => pathPoint([[-69,0,53],[-69,0,-53],[69,0,-53],[69,0,53],[-69,0,53]], progress);
+export const roadPoint = (progress,model=null) => pathPoint(model?.roads||[[-69,0,53],[-69,0,-53],[69,0,-53],[69,0,53],[-69,0,53]], progress);
 
 export function foundationDepth(x,z,prep,pour,center){
     for(let i=0;i<10;i++){const px=center+(i%2?18:-18),pz=-23+Math.floor(i/2)*10;if(Math.abs(x-px)<2.3&&Math.abs(z-pz)<2.3)return -.85*clamp(prep*10-i)*(1-clamp(pour*40-i));}

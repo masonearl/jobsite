@@ -37,7 +37,8 @@ async function run(){
   doc().querySelector('[data-destination="stratos"]').click();
   click('mobilize-campus');await until(()=>!el('construction').hidden);await until(()=>Number(el('campus-canvas').dataset.drawCalls)>0);
   result('Construction view also fills the viewport',Math.abs(el('campus-canvas').getBoundingClientRect().height-f.contentWindow.innerHeight)<2);
-  await until(()=>el('campus-canvas').dataset.cameraFollow==='true');result('Follow work is the initial construction camera',true);
+  await until(()=>el('campus-canvas').dataset.cameraFollow==='false');result('Site overview introduces the destination layout',el('campus-canvas').dataset.modelRevision==='2');
+  doc().querySelector('[data-view="campus"]').click();result('Campus overview is available alongside the work camera',doc().querySelector('[data-view="campus"]').getAttribute('aria-pressed')==='true');
   doc().querySelector('[data-view="parking"]').click();await until(()=>el('campus-canvas').dataset.cameraFollow==='false');result('Parking camera leaves automatic crew following',true);
   click('next-crew');await until(()=>el('campus-canvas').dataset.cameraFollow==='true');result('Next crew restores the work camera',true);
   click('operations-toggle');result('Operations drawer opens above the site',!el('operations').hidden&&el('operations-toggle').getAttribute('aria-expanded')==='true');click('operations-close');result('Operations drawer closes and restores focus',el('operations').hidden&&doc().activeElement===el('operations-toggle'));
@@ -57,7 +58,7 @@ async function run(){
   await until(()=>Number(el('campus-canvas').dataset.drawCalls)>0);
   result('3D scene remains available',el('scene-error').hidden&&el('campus-canvas').width>0);
   click('map-return');doc().querySelector('[data-destination="starbase"]').click();click('mobilize-campus');await sleep(350);
-  result('Different destinations have isolated saves and scopes',get('metric-progress')==='0%'&&get('work-packages').includes('Launch pad + tower'));
+  result('Different destinations have isolated saves and scopes',get('metric-progress')==='0%'&&get('work-packages').includes('Launch mount 2 + tower'));
   click('run-project');await until(()=>get('metric-day')!=='0');click('guide-open');result('Start construction dispatches work and purchases materials on a fresh project',get('delivery-roster').includes('Ordered')&&doc().querySelectorAll('[data-task] .work-actions button').length>0);click('guide-close');
   if(mobile)result('390 px viewport has no horizontal page overflow',doc().documentElement.scrollWidth<=390);
   if(mobile){

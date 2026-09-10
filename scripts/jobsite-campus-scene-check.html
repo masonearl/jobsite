@@ -1,6 +1,6 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><title>Construction activity checks</title>
 <style>body{margin:20px;background:#15120f;color:#efe8dd;font:13px system-ui}button,select{background:#241e18;color:#efe8dd;padding:10px;border:1px solid #725e49;margin-right:8px}.stage{position:relative;width:1200px;max-width:100%;height:700px}canvas{width:100%;height:100%;touch-action:none}#status{margin:16px 0}li{margin:4px 0}.pass{color:#d3b48f}.fail{color:#eb9b7e}</style>
-<script type="importmap">{"imports":{"three":"/assets/vendor/three/three.module.min.js"}}</script><script src="/assets/js/jobsite-campus.js"></script>
+<script type="importmap">{"imports":{"three":"/assets/vendor/three/three.module.min.js"}}</script><script src="/assets/js/jobsite-campus-models.js"></script><script src="/assets/js/jobsite-campus.js"></script>
 <h1>Construction activity checks</h1><button id="check">Run checks</button><select id="preset" aria-label="Preview phase"><option value="7">Earthworks + trench</option><option value="22">Concrete</option><option value="29">Steel erection</option><option value="40">Fit-out</option><option value="0">Morning arrival</option></select><button id="run">Run scene</button><button id="next">Next work front</button><button id="parking">Parking</button><p id="status">Loading</p><div class="stage"><canvas id="scene"></canvas></div><ol id="results"></ol>
 <script type="module">
 import {CampusScene} from '/assets/js/jobsite-campus-scene.js';
