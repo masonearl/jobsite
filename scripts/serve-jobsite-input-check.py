@@ -21,6 +21,8 @@ class Handler(SimpleHTTPRequestHandler):
             return str(ROOT / 'scripts' / 'jobsite-input-check.html')
         if path.split('?', 1)[0] == '/__project-check':
             return str(ROOT / 'scripts' / 'jobsite-project-check.html')
+        if path.split('?', 1)[0] == '/__interaction-check':
+            return str(ROOT / 'scripts' / 'jobsite-campus-interaction-check.html')
         if path.split('?', 1)[0] == '/__activity-check':
             return str(ROOT / 'scripts' / 'jobsite-campus-scene-check.html')
         if path.split('?', 1)[0] == '/__world-detail-check':
@@ -52,6 +54,8 @@ class Handler(SimpleHTTPRequestHandler):
                     site = 'stratos'
                 day = {'arrival': 0, 'earth': 7, 'concrete': 22, 'steel': 29, 'mid': 40, 'complete': 180}.get(query['seed'][0], 40)
                 setup = f"const C=JobsiteCampus,s=C.create('{site}');C.dispatch(s,'all',true);Object.keys(C.MATERIALS).forEach(k=>C.order(s,k));s.running=true;for(let i=0;i<{day * 10}&&!s.complete;i++){{C.advance(s,.1);for(const t of C.plan(s.site))if(t.gate)C.inspect(s,t.id);}}s.running=false;localStorage.setItem('openmud-jobsite-campus-v1:'+s.site,JSON.stringify(s));"
+            if query.get('incident') == ['true']:
+                setup += "const stopped=JSON.parse(localStorage.getItem('openmud-jobsite-campus-v1:stratos'));stopped.running=true;JobsiteCampus.incident(stopped,'Haul truck','Civil crew member');localStorage.setItem('openmud-jobsite-campus-v1:stratos',JSON.stringify(stopped));"
             if query.get('fast') == ['true']:
                 setup += 'const original=JobsiteCampus.advance;JobsiteCampus.advance=(s,days)=>original(s,days*32);'
             html = html.replace('<script type="module" src="/assets/js/jobsite-campus-ui.js">', '<script>' + setup + '</script><script type="module" src="/assets/js/jobsite-campus-ui.js">')

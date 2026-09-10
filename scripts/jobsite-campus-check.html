@@ -58,6 +58,7 @@ async function run(){
   result('3D scene remains available',el('scene-error').hidden&&el('campus-canvas').width>0);
   click('map-return');doc().querySelector('[data-destination="starbase"]').click();click('mobilize-campus');await sleep(350);
   result('Different destinations have isolated saves and scopes',get('metric-progress')==='0%'&&get('work-packages').includes('Launch pad + tower'));
+  click('run-project');await until(()=>get('metric-day')!=='0');click('guide-open');result('Start construction dispatches work and purchases materials on a fresh project',get('delivery-roster').includes('Ordered')&&doc().querySelectorAll('[data-task] .work-actions button').length>0);click('guide-close');
   if(mobile)result('390 px viewport has no horizontal page overflow',doc().documentElement.scrollWidth<=390);
   if(mobile){
    const visibleButtons=[...doc().querySelectorAll('.topbar button')].filter(b=>!b.hidden);
@@ -68,6 +69,10 @@ async function run(){
   f.src='/__campus-fixture?world-unavailable=true';await until(()=>doc()?.body?.dataset.campusReady==='true'&&!el('world-error').hidden);
   result('WebGL globe failure keeps the project list available',!el('destinations').hidden&&doc().querySelectorAll('[data-destination]').length===7);
   click('mobilize-campus');await until(()=>Number(el('campus-canvas').dataset.drawCalls)>0);result('A project remains playable if only the globe fails',el('scene-error').hidden&&!el('construction').hidden);
+  f.src='/__campus-fixture?seed=earth&incident=true&fast=true';await until(()=>doc()?.URL.includes('incident=true')&&doc()?.body?.dataset.campusReady==='true');click('mobilize-campus');await until(()=>get('next-title')==='Equipment contact / work stopped.');
+  result('Saved incident opens with work stopped and Run disabled',el('run-project').disabled&&get('next-copy').includes('$25,000'));
+  click('next-action');await until(()=>get('next-title')==='Review complete / release required.');result('Safety review finishes without automatically restarting work',el('run-project').disabled);
+  click('next-action');result('Explicit release restores Run and retains the incident record',!el('run-project').disabled&&get('safety-status').includes('1 incident'));
   document.querySelector('#status').textContent='PASS: all campus browser checks';
  }catch(error){document.querySelector('#status').textContent='FAIL: '+error.message;}finally{document.querySelector('#run').disabled=false;}
 }

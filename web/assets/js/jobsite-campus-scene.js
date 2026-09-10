@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import { CampusActivity } from './jobsite-campus-actors.js';
 import { clamp, cycle, mix, smooth, workLocation } from './jobsite-campus-activity.mjs';
+import { PedestrianNetwork, wallPanels } from './jobsite-campus-spatial.mjs';
+import { installation, deliveryPose } from './jobsite-campus-logistics.mjs';
 import { OrbitControls } from '../vendor/three/OrbitControls.js';
 
 const C = window.JobsiteCampus;
+const stateDelivered=(s,key)=>s.orders[key].ordered&&s.orders[key].arrival<=s.day;
 export class CampusScene {
     constructor(canvas, failure) {
         this.canvas = canvas;
@@ -71,6 +74,7 @@ export class CampusScene {
         const token = ++this.assetToken;
         this.activity?.dispose();
         if (this.root) { this.root.traverse(o => { o.geometry?.dispose(); }); this.scene.remove(this.root); }
+        this.navigationKey = ''; this.navigation = new PedestrianNetwork();
         this.state = state; this.root = new THREE.Group(); this.scene.add(this.root);
         const p = C.site(state.site), coast = p.biome === 'coast', desert = p.biome === 'desert';
         this.scene.background = new THREE.Color(coast ? 0xbad5db : 0xc0d0d9); this.scene.fog = new THREE.Fog(this.scene.background, 270, 750);
@@ -113,6 +117,9 @@ export class CampusScene {
         }
         this.cranes = Array.from({ length: 3 }, () => this.buildCrane());
         this.activity = new CampusActivity(this, state);
+        this.cranes.forEach(crane => { crane.carrier=this.activity.truck(); crane.carrier.bed.visible=false; this.box([3.5,.25,8],[0,1.1,1],0x707773,crane.carrier.g); });
+        this.stock=this.group(); this.box([15,.08,12],[5,.03,48],0x817660,this.stock); this.activity.label('MATERIAL LAYDOWN',6,55,14);
+        this.stockPieces=Array.from({length:15},(_,i)=>this.box([.55,.55,10],[i%5*1.2+2,.5+Math.floor(i/5)*.6,48],0x879a9b,this.stock,.6));
         this.setCamera('site'); this.resize(); this.render(state, 0);
         this.textureLoader.load('/assets/jobsite/' + (coast ? 'desert' : p.biome) + '.jpg', texture => {
             if (token !== this.assetToken) { texture.dispose(); return; }
@@ -135,6 +142,7 @@ export class CampusScene {
             for(const edge of [-1.7,1.7]){this.box([3.6,.7,.12],[0,.05,edge],0x907353,form);this.box([.12,.7,3.6],[edge,.05,0],0x907353,form);}
             for(const edge of [-1,-.5,0,.5,1]){this.box([2.8,.07,.07],[0,.15,edge],0x4d4540,cage,.7);this.box([.07,.07,2.8],[edge,.23,0],0x4d4540,cage,.7);}
         }
+        const doors=this.group(g);
         const frame = this.group(g), envelope = this.group(g), roof = this.group(g), fitout = this.group(g), mep = this.group(g);
         if (type === 'space' && key === 'a') {
             for (let y = 0; y < 52; y += 6.5) {
@@ -152,9 +160,14 @@ export class CampusScene {
                 this.box([40, .65, .45], [0, 0, 0], 0x879a9b, rafter, .6);
                 for (let px = -20; px < 20; px += 8) this.beam([px, 0, 0], [px + 4, -2, 0], .16, 0xa3b2b0, rafter);
             }
-            for (const z of [-22, 22]) this.box([41, height, .3], [0, height / 2, z], 0xc0c9c9, envelope, .2);
-            for (const px of [-20, 20]) this.box([.3, height, 44], [px, height / 2, 0], 0xa7b4b8, envelope, .2);
-            for (let px = -19; px < 20; px += 2) for (const z of [-22.2, 22.2]) this.box([.07, height, .07], [px, height / 2, z], 0x939f9e, envelope);
+            for (const panel of wallPanels(height)) {
+                const part = this.box(panel.size, panel.position, 0xb4c0c1, envelope, .2);
+                part.userData.groundSolid = panel.solid;
+            }
+            for (const z of [-22,22]) {
+                this.box([8,.04,5],[0,.58,z],0xd1b680,doors);
+                for (const x of [-4.2,4.2]) this.box([.18,5,.25],[x,2.5,z],0xc9a96a,doors);
+            }
             this.box([42, .35, 46], [0, height + .3, 0], 0xd2d4cc, roof, .2);
             for (let z = -20; z < 22; z += 4) this.box([42, .08, .12], [0, height + .53, z], 0xa3aca9, roof);
             for (let i = 0; i < 6; i++) this.box([4, 1.5, 3], [-12 + i % 3 * 12, height + 1.2, -12 + Math.floor(i / 3) * 24], 0x858f8e, roof);
@@ -162,7 +175,7 @@ export class CampusScene {
             for (const z of [-17, 0, 17]) this.box([37, .4, .7], [0, height - 2, z], 0x74a3a2, mep, .4);
             for (const px of [-15, 15]) this.box([.6, .5, 43], [px, height - 2, 0], 0xc0a86a, mep, .4);
         }
-        return { key, g, slab, foundation, bases, forms, rebar, frame, envelope, roof, fitout, mep };
+        return { key, g, doors, slab, foundation, bases, forms, rebar, frame, envelope, roof, fitout, mep };
     }
     buildCrane() {
         const g = this.group(), upper = this.group(g, 0, 2, 0);
@@ -177,43 +190,65 @@ export class CampusScene {
         const payload = this.group(this.root);
         return { g, upper, boom, cable, hook, payload, payloadKey: null };
     }
-    updateCrane(crane, task, state, index) {
-        const active = !!task;
-        [crane.g, crane.boom, crane.cable, crane.hook].forEach(o => o.visible = index < state.equipment.crane);
-        crane.payload.visible = active;
-        const p = task ? state.tasks[task.id].progress : 0;
-        const hall = task && this.halls.find(h => task.id === h.key + '-frame');
-        const group = hall ? hall.frame : task?.id === 'power' ? this.power : task?.id === 'cooling' ? this.cooling : null;
-        const c = cycle(p, group?.children.length || 1), part = group?.children[c.index];
-        const base = hall ? [hall.g.position.x + 26, 0, hall.g.position.z + (part?.position.z || 0)] : task?.zone === 'power' ? [-14, 0, -35] : task?.zone === 'cooling' ? [57, 0, -35] : [60,0,35-index*10];
-        crane.g.position.set(...base);
-        let target = [base[0]-7, 1, base[2]-5], loadPosition = target;
-        if (part) {
-            const parent = hall ? hall.g.position : group.position;
-            target = [part.position.x+parent.x, part.position.y+parent.y, part.position.z+parent.z];
-            const key = task.id + ':' + c.index;
-            if (crane.payloadKey !== key) { crane.payload.clear(); const load = part.clone(); load.position.set(0,0,0); load.visible = true; const bounds=new THREE.Box3().setFromObject(load); crane.loadBottom=bounds.min.y;crane.loadTop=bounds.max.y;crane.payload.add(load); crane.payloadKey = key; }
-            const pickup = [base[0]+2, .3-crane.loadBottom, base[2]+8];
-            const raised = [pickup[0],target[1]+6,pickup[2]], over = [target[0],target[1]+6,target[2]];
-            loadPosition = c.phase < .22 ? pickup.map((v,i)=>mix(v,raised[i],smooth(c.phase/.22))) : c.phase < .7 ? raised.map((v,i)=>mix(v,over[i],smooth((c.phase-.22)/.48))) : over.map((v,i)=>mix(v,target[i],smooth((c.phase-.7)/.3)));
-            crane.payload.position.set(...loadPosition);
-        }
-        const top = [loadPosition[0],loadPosition[1]+(crane.loadTop||2)+6,loadPosition[2]], hook = [loadPosition[0],loadPosition[1]+(crane.loadTop||2)+.3,loadPosition[2]];
-        this.activity.setBeam(crane.boom,[base[0],4,base[2]],top);this.activity.setBeam(crane.cable,top,hook);crane.hook.position.set(...hook);
-        crane.upper.rotation.y=Math.atan2(-(top[0]-base[0]),-(top[2]-base[2]));
+    craneAssignment(task,state) {
+        const hall=task&&this.halls.find(h=>task.id===h.key+'-frame');
+        const group=hall?hall.frame:task?.id==='power'?this.power:task?.id==='cooling'?this.cooling:null;
+        if(!group)return null;
+        const p=state.tasks[task.id].progress,c=installation(p,group.children.length),part=group.children[c.index],parent=hall?hall.g.position:group.position;
+        const target=[part.position.x+parent.x,part.position.y+parent.y,part.position.z+parent.z];
+        const base=hall?[hall.g.position.x+26,0,target[2]]:task.zone==='power'?[-14,0,-35]:[57,0,-35];
+        return {hall,group,p,c,part,target,base};
     }
+    updateCrane(crane, task, state, index) {
+        [crane.g,crane.boom,crane.cable,crane.hook].forEach(o=>o.visible=index<state.equipment.crane);
+        const job=this.craneAssignment(task,state);crane.payload.visible=!!job; if(crane.carrier)crane.carrier.g.visible=!!job;
+        if(!job){crane.g.position.set(60,0,35-index*10);crane.boom.visible=crane.cable.visible=crane.hook.visible=false;return;}
+        const {p,c,part,target,base,group}=job,key=task.id+':'+c.index;
+        if(crane.payloadKey!==key){
+            crane.payload.clear();const load=part.clone();load.position.set(0,0,0);load.visible=true;
+            const bounds=new THREE.Box3().setFromObject(load);crane.loadBottom=bounds.min.y;crane.loadTop=bounds.max.y;
+            crane.carryRotation=new THREE.Quaternion();const size=bounds.getSize(new THREE.Vector3());
+            if(size.y>7)crane.carryRotation.setFromAxisAngle(new THREE.Vector3(1,0,0),Math.PI/2);
+            else if(size.x>8)crane.carryRotation.setFromAxisAngle(new THREE.Vector3(0,1,0),Math.PI/2);
+            load.quaternion.copy(crane.carryRotation);crane.carryBottom=new THREE.Box3().setFromObject(load).min.y;load.quaternion.identity();
+            crane.payload.add(load);crane.payloadKey=key;
+        }
+        const pose=deliveryPose(p,group.children.length,base,target,crane.loadBottom),angle=1-smooth((c.phase-.42)/.14);
+        crane.payload.children[0].quaternion.identity().slerp(crane.carryRotation,angle);
+        if(c.phase<.42)pose.cargo[1]=1.4-crane.carryBottom;
+        else if(c.phase<.56)pose.cargo[1]=mix(1.4-crane.carryBottom,Math.max(1.4-crane.loadBottom,target[1])+6,smooth((c.phase-.42)/.14));
+        crane.g.position.set(...base);crane.payload.position.set(...pose.cargo);crane.payload.visible=!pose.placed;
+        const ahead=deliveryPose(Math.min(1,p+.00001),group.children.length,base,target,crane.loadBottom).vehicle;
+        this.activity.placeVehicle(crane.carrier,pose.vehicle,ahead);
+        const loadTop=pose.carried?2:crane.loadTop,top=pose.suspended?[pose.cargo[0],pose.cargo[1]+loadTop+6,pose.cargo[2]]:[base[0]-3,18,base[2]-5],hook=[pose.cargo[0],pose.cargo[1]+loadTop+.3,pose.cargo[2]];
+        this.activity.setBeam(crane.boom,[base[0],4,base[2]],top);this.activity.setBeam(crane.cable,top,hook);crane.hook.position.set(...hook);
+        crane.cable.visible=crane.hook.visible=pose.suspended;crane.upper.rotation.y=Math.atan2(-(top[0]-base[0]),-(top[2]-base[2]));
+        crane.phase=pose.label;crane.installed=pose.installed;crane.total=group.children.length;
+    }
+    updateNavigation(s) {
+        const key=[...this.halls.flatMap(h=>[h.frame,h.envelope,h.fitout]),this.power,this.cooling].map(g=>g.children.filter(p=>p.visible).length).join(':');
+        if(key===this.navigationKey)return;this.navigationKey=key;this.root.updateMatrixWorld(true);
+        const boxes=[-48,-35,-22].map(x=>({x0:x-5.4,x1:x+5.4,z0:37.6,z1:42.4}));
+        boxes.push({x0:-75,x1:75,z0:-60.2,z1:-59.8},{x0:-75,x1:-53,z0:59.8,z1:60.2},{x0:-43,x1:75,z0:59.8,z1:60.2});
+        const add=(group,filter=()=>true)=>group.children.forEach(part=>{if(!part.visible||!filter(part))return;const b=new THREE.Box3().setFromObject(part);if(b.min.y>3.5)return;boxes.push({x0:b.min.x,x1:b.max.x,z0:b.min.z,z1:b.max.z});});
+        for(const h of this.halls){add(h.frame);add(h.envelope,part=>part.userData.groundSolid===true);add(h.fitout);}
+        add(this.power);add(this.cooling);this.navigation=new PedestrianNetwork(boxes);
+    }
+    prepare(s,days) { this.activity?.prepare(s,days); }
+    showInstalled(group, amount) { const n=installation(amount,group.children.length).installed;group.children.forEach((part,i)=>part.visible=i<n);group.visible=n>0; }
     showParts(group, amount) { group.children.forEach((part, i) => { part.visible = i < Math.floor(amount * group.children.length + 1e-6); }); group.visible = amount > 0; }
     render(s, dt) {
         if (!this.root || !this.activity) return;
         const renderStart=performance.now();
         const val = key => s.tasks[key]?.progress || 0;
-        const { active } = C.allocation(s);
+        const active=s.safety.stage?(this.activity.active||[]):C.allocation(s,true).active;
         for (const h of this.halls) {
             const foundation = val(h.key + '-slab'), poured = clamp((foundation - .25) / .75);
             this.showParts(h.bases,val(h.key+'-prep'));this.showParts(h.forms,val(h.key+'-rebar'));this.showParts(h.rebar,val(h.key+'-rebar'));h.forms.visible=h.forms.visible&&!C.done(s,h.key+'-strength');h.rebar.children.forEach((c,i)=>{c.visible=c.visible&&foundation*40<=i;});
             this.showParts(h.foundation, clamp(foundation / .25));
             h.slab.children.forEach((strip, i) => { const f = clamp(poured * 10 - i); strip.visible = f > 0; strip.scale.x = Math.max(.001, f); strip.position.x = -21.5 + 21.5 * f; });
-            this.showParts(h.frame, val(h.key + '-frame'));
+            this.showInstalled(h.frame, val(h.key + '-frame'));
+            h.doors.visible=val(h.key+'-envelope')>0;
             this.showParts(h.envelope, val(h.key + '-envelope'));
             this.showParts(h.roof, val(h.key + '-envelope'));
             const indoor = this.followWork && active.some(t => t.zone === h.key && !t.outdoor);
@@ -223,7 +258,10 @@ export class CampusScene {
             this.showParts(h.mep, Math.max(val(h.key + '-mep'), val(h.key + '-electric')));
         }
         for(const key of ['power','cooling'])this.showParts(this.plantPads[key],val(key+'-pad'));
-        this.showParts(this.power, val('power')); this.showParts(this.cooling, val('cooling'));
+        this.showInstalled(this.power, val('power')); this.showInstalled(this.cooling, val('cooling'));
+        this.updateNavigation(s);
+        const steelRemaining=this.halls.reduce((n,h)=>n+h.frame.children.filter(p=>!p.visible).length,0);
+        this.stockPieces?.forEach((p,i)=>p.visible=stateDelivered(s,'steel')&&i<Math.min(15,steelRemaining));
         this.activity.update(s, dt, active);
         const lifting = active.filter(t => t.equipment === 'crane');
         this.cranes.forEach((crane, i) => this.updateCrane(crane, lifting[i], s, i));

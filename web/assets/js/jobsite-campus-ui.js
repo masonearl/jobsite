@@ -144,7 +144,8 @@ async function mobilize() {
 }
 function showMap() { pause(); onMap = true; document.body.classList.add('world-view'); $('operations-toggle').hidden = true; openOperations(false, false); $('explorer').hidden = false; $('construction').hidden = true; $('map-return').hidden = true; choose(selected.id); world?.resize(); window.scrollTo({ top: 0 }); $('mobilize-campus').focus(); }
 $('mobilize-campus').addEventListener('click', mobilize); $('map-return').addEventListener('click', showMap); $('choose-next').addEventListener('click', showMap);
-function toggleRun() { if (!state || state.complete || onMap || $('field-guide').open) return; state.running = !state.running; dirty = true; hud(); }
+function toggleRun() { if (!state || state.complete || onMap || $('field-guide').open) return; if (['stopped','ready'].includes(state.safety.stage)) return; if(state.day===0&&!Object.values(state.tasks).some(t=>t.enabled)){C.dispatch(state,'all',true);Object.keys(C.MATERIALS).forEach(k=>C.order(state,k));} state.running = !state.running; dirty = true; hud(); }
+$('traffic-separation').addEventListener('change',e=>{state.safety.controls=e.target.checked;dirty=true;hud();});
 $('run-project').addEventListener('click', toggleRun);
 $('speed').addEventListener('change', e => { state.speed = Number(e.target.value); dirty = true; });
 $('dispatch-all').addEventListener('click', () => { C.dispatch(state, 'all', true); dirty = true; hud(); });
@@ -155,6 +156,9 @@ function desk(allocation) {
     const tasks = C.plan(state.site), gates = tasks.find(t => t.gate && state.tasks[t.id].progress === 1 && !state.tasks[t.id].accepted);
     let title, copy, button, action;
     if (state.complete) { title = 'Ready for the owner.'; copy = 'Every work package is accepted. Review the final score or mobilize another project.'; button = 'Choose next project'; action = showMap; }
+    else if(state.safety.stage==='stopped'){title='Equipment contact / work stopped.';copy=state.safety.last.equipment+' contacted a crew member. All production is stopped. The game charges $25,000, a half-day review and 10 score points.';button='Secure site + start review';action=()=>{scene?.activity.regroup();C.recover(state);};}
+    else if(state.safety.stage==='review'){title='Safety stand-down review.';copy=state.safety.remaining.toFixed(2)+' scenario days remaining. Crews are rebriefed and traffic separation is restored. No construction advances.';button=state.running?'Pause review':'Resume review';action=()=>{state.running=!state.running;};}
+    else if(state.safety.stage==='ready'){title='Review complete / release required.';copy='The incident remains in the project record. Release the work, then restart the project.';button='Release work';action=()=>C.recover(state);}
     else if (gates) { title = 'Inspection hold.'; copy = gates.name + ' is ready. Release it to open the next work front.'; button = 'Accept inspection'; action = () => C.inspect(state, gates.id); }
     else if (!tasks.some(t => state.tasks[t.id].enabled && !state.tasks[t.id].accepted)) { title = 'Mobilize the crews.'; copy = 'Dispatch the work packages once. The crews will take each assignment when its prerequisites are ready.'; button = 'Dispatch all crews'; action = () => C.dispatch(state, 'all', true); }
     else if (Object.values(state.orders).some(o => !o.ordered)) { title = 'Buy ahead of the build.'; copy = 'Steel, switchgear, cooling and fit-out packages have delivery lead times. Order early while the sitework advances.'; button = 'Order all packages / ' + money(Object.entries(C.MATERIALS).reduce((n, [k, m]) => n + (state.orders[k].ordered ? 0 : m.quantity * m.cost), 0)); action = () => Object.keys(C.MATERIALS).forEach(k => C.order(state, k)); }
@@ -167,7 +171,10 @@ function desk(allocation) {
 function hud() {
     if (!state || onMap) return;
     const a = C.allocation(state), p = C.site(state.site), progress = C.progress(state), workers = a.active.reduce((n, t) => n + C.TRADES[t.trade].people, 0), payroll = Object.entries(state.crews).reduce((n, [k, count]) => n + count * C.TRADES[k].people, 0);
-    text('run-project', state.complete ? 'Handed over' : state.running ? 'Pause project' : 'Run project'); $('run-project').disabled = state.complete;
+    text('run-project', state.complete ? 'Handed over' : state.running ? 'Pause project' : 'Run project'); $('run-project').disabled = state.complete||['stopped','ready'].includes(state.safety.stage);
+    if(state.day===0&&!Object.values(state.tasks).some(t=>t.enabled))text('run-project','Start construction');
+    $('traffic-separation').checked=state.safety.controls;$('traffic-separation').disabled=!!state.safety.stage||state.complete;
+    text('safety-status',state.safety.incidents+(state.safety.incidents===1?' incident / ':' incidents / ')+state.safety.lostDays.toFixed(1)+' stand-down days'+(Object.keys(state._siteHolds||{}).length?' / equipment yielding at a crossing':''));
     text('metric-progress', Math.floor(progress * 100) + '%'); $('overall-progress').style.width = progress * 100 + '%';
     text('metric-day', Math.floor(state.day)); text('metric-target', 'Target ' + p.target + ' days' + (state.day > p.target ? ' / over target' : ''));
     text('metric-cost', money(state.spent)); text('metric-budget', money(state.budget) + ' allowance' + (state.spent > state.budget ? ' / over allowance' : ''));
@@ -199,7 +206,7 @@ function hud() {
     const report = C.report(state);
     text('completion-report', 'Score ' + report.score + '/100. ' + report.days + ' scenario days / ' + money(report.cost) + ' / ' + report.laborHours.toLocaleString() + ' productive labor hours. ' + (report.onTime ? 'Within schedule target.' : 'Beyond schedule target.') + ' ' + (report.onBudget ? 'Within cost allowance.' : 'Beyond cost allowance.'));
     text('process-save-note',state.migratedFrom===1?'Earlier progress retained. '+state.legacyCredits.length+' newly separated prerequisites received legacy credit; remaining work follows the updated sequence. Saving this upgrade requires a device backup of the original save.':'Process model 2 / 44 work packages. Durations, crew sizes and acceptance outcomes are illustrative.');
-    text('project-record-metrics', Math.round(state.laborHours).toLocaleString() + ' productive labor hours / ' + state.peakWorkers + ' peak working people / ' + state.idleDays.toFixed(1) + ' days with no productive work.');
+    text('project-record-metrics', Math.round(state.laborHours).toLocaleString() + ' productive labor hours / ' + state.peakWorkers + ' peak working people / ' + state.idleDays.toFixed(1) + ' days with no productive work / '+report.incidents+' equipment contacts / '+report.standDownDays.toFixed(1)+' stand-down days.');
     $('project-log').replaceChildren(); for (const entry of state.log) { const li = document.createElement('li'); li.textContent = 'Day ' + Math.floor(entry.day) + ': ' + entry.message; $('project-log').append(li); }
     $('dispatch-all').disabled = $('hold-all').disabled = state.complete;
 }
@@ -231,7 +238,7 @@ function loop(now) {
     const dt = Math.min(.1, (now - (last || now)) / 1000); last = now;
     if (onMap && !document.hidden && !$('field-guide').open && now - renderTime > 33) { world?.render(Math.min(.1, (now - renderTime) / 1000)); renderTime = now; }
     if (!onMap && state) {
-        if (state.running && !$('field-guide').open) { C.advance(state, dt / 12 * state.speed); dirty = true; }
+        if (state.running && !$('field-guide').open) { scene?.prepare(state,dt / 12 * state.speed); C.advance(state, dt / 12 * state.speed); dirty = true; }
         if (now - hudTime > 250) { hud(); hudTime = now; }
         if (!document.hidden && !$('field-guide').open && now - renderTime > 33) { scene?.render(state, Math.min(.1, (now - renderTime) / 1000)); renderTime = now; }
         if (now - saveTime > 2000) { save(); saveTime = now; }

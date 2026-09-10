@@ -73,6 +73,8 @@
         return tasks;
     }
     const PROCESS_SOURCES = {
+        traffic: { title: 'OSHA / worksite traffic and backing solutions', url: 'https://www.osha.gov/preventing-backovers/solutions' },
+        lifting: { title: 'OSHA / keeping clear of suspended loads', url: 'https://www.osha.gov/laws-regs/regulations/standardnumber/1926/1926.1425' },
         sequencing: { title: 'EPA / construction sequencing', url: 'https://www.epa.gov/system/files/documents/2021-11/bmp-construction-sequencing.pdf' },
         excavation: { title: 'OSHA / excavation requirements', url: 'https://www.osha.gov/laws-regs/regulations/standardnumber/1926/1926.651' },
         utilities: { title: 'Salt Lake City / utility inspection practices', url: 'https://www.slcdocs.com/utilities/PDF%20Files/Std_practices_090105.pdf' },
@@ -143,6 +145,7 @@
         return { version: 2, site: id, day: 0, running: false, speed: 1, complete: false, spent: 0, budget: site(id).type === 'fab' ? 33000000 : site(id).type === 'space' ? 32000000 : 31000000, laborHours: 0, idleDays: 0, peakWorkers: 0,
             crews: Object.fromEntries(Object.keys(TRADES).map(k => [k, 1])), equipment: Object.fromEntries(Object.keys(EQUIPMENT).map(k => [k, k === 'lift' ? 2 : 1])),
             tasks: Object.fromEntries(plan(id).map(t => [t.id, { progress: 0, enabled: false, accepted: false, started: false, priority: 0, start: null, finish: null }])),
+            safety: { controls: true, incidents: 0, lostDays: 0, remaining: 0, stage: null, last: null },
             orders: Object.fromEntries(Object.keys(MATERIALS).map(k => [k, { ordered: false, arrival: null, used: 0, expedited: false }])), log: [] };
     }
     function note(s, message) { s.log.unshift({ day: s.day, message }); s.log.length = Math.min(s.log.length, 30); }
@@ -152,9 +155,11 @@
         return { name: 'Clear work window', factor: 1, crane: false, ends: phase < 7 ? 7 - phase : 19 - phase };
     }
     function done(s, id) { return s.tasks[id]?.accepted === true; }
-    function readiness(s, t) {
+    function readiness(s, t, ignoreHolds = false) {
         const state = s.tasks[t.id];
         if (state.accepted) return 'Complete';
+        if (s.safety?.stage) return 'Safety stand-down / '+s.safety.stage;
+        if (!ignoreHolds && s._siteHolds?.[t.id]) return s._siteHolds[t.id];
         if (state.progress >= 1) return 'Inspection release needed';
         if (!state.enabled && !t.elapsed) return 'Not dispatched';
         const missing = t.deps.filter(id => !done(s, id));
@@ -168,16 +173,17 @@
         if (t.equipment === 'crane' && weather(s).crane) return 'High wind / crane hold';
         return 'Ready';
     }
-    function allocation(s) {
+    function allocation(s, ignoreHolds = false) {
         const labor = { ...s.crews }, equipment = { ...s.equipment }, active = [], passive = [], reasons = {};
         const tasks = plan(s.site).sort((a, b) => s.tasks[b.id].priority - s.tasks[a.id].priority || Number(s.tasks[b.id].started) - Number(s.tasks[a.id].started));
         for (const original of tasks) {
             const phase=workPhase(s,original),t={...original,...(original.reachWork?{trade:phase.trade,equipment:phase.equipment}:{}),phase:phase.label};
-            let why = readiness(s, t);
+            let why = readiness(s, t, true);
+            const hold = !ignoreHolds && s._siteHolds?.[t.id];
             if (why==='Ready' && t.elapsed) { passive.push(t); reasons[t.id]='Curing / test wait'; continue; }
             if (why === 'Ready' && labor[t.trade] < 1) why = 'Waiting for ' + TRADES[t.trade].name.toLowerCase();
             if (why === 'Ready' && t.equipment && equipment[t.equipment] < 1) why = 'Waiting for ' + EQUIPMENT[t.equipment].name.toLowerCase();
-            if (why === 'Ready') { active.push(t); labor[t.trade]--; if (t.equipment) equipment[t.equipment]--; }
+            if (why === 'Ready') { if(!hold)active.push(t); labor[t.trade]--; if (t.equipment) equipment[t.equipment]--; if(hold)why=hold; }
             reasons[t.id] = why === 'Ready' ? 'Working' : why;
         }
         return { active, passive, reasons, labor, equipment };
@@ -207,22 +213,39 @@
     }
     function inspect(s, id) {
         const t = plan(s.site).find(t => t.id === id), state = s.tasks[id];
-        if (!t?.gate || state.progress < 1 || state.accepted) return false;
+        if (s.safety?.stage || !t?.gate || state.progress < 1 || state.accepted) return false;
         state.accepted = true; state.finish = s.day; note(s, t.name + ' accepted.');
         if (id === 'handover') { s.complete = true; s.running = false; }
         return true;
     }
+    function siteHolds(s, holds) {
+        Object.defineProperty(s, '_siteHolds', {value: {...holds}, writable: true, configurable: true, enumerable: false});
+    }
+    function incident(s, equipment, worker) {
+        if (!s.running || s.complete || s.safety.stage) return false;
+        s.safety.incidents++; s.safety.stage='stopped'; s.safety.remaining=.5;
+        s.safety.last={day:s.day,equipment:String(equipment).slice(0,80),worker:String(worker).slice(0,80)};
+        s.spent+=25000; s.running=false; siteHolds(s,{});
+        note(s,'Equipment contact: '+s.safety.last.equipment+'. Work stopped. $25,000 game incident allowance; review required.'); return true;
+    }
+    function recover(s) {
+        if (s.safety.stage==='stopped') { s.safety.controls=true; s.safety.stage='review'; s.running=true; note(s,'Site secured. Traffic separation restored; half-day stand-down review started.'); return true; }
+        if (s.safety.stage==='ready') { s.safety.stage=null; s.running=false; siteHolds(s,{}); note(s,'Review complete. Crews rebriefed; work released for restart.'); return true; }
+        return false;
+    }
     function advance(s, days) {
         if (!s.running || s.complete || !Number.isFinite(days) || days <= 0) return;
+        if (s.safety.stage && s.safety.stage!=='review') { s.running=false; return; }
         // Small deterministic slices preserve dependency and equipment ownership across speed settings.
         let left = Math.min(days, 20);
         while (left > 1e-8) {
-            const dt = Math.min(.05, left), { active, passive } = allocation(s), w = weather(s);
+            const dt = Math.min(.05, left, s.safety.stage==='review'?s.safety.remaining:Infinity), { active, passive } = allocation(s), w = weather(s);
             const workers = active.reduce((n, t) => n + TRADES[t.trade].people, 0);
             s.peakWorkers = Math.max(s.peakWorkers, workers); s.laborHours += workers * 8 * dt;
             const daily = Object.entries(s.crews).reduce((n, [k, count]) => n + count * TRADES[k].rate, 0) + Object.entries(s.equipment).reduce((n, [k, count]) => n + count * EQUIPMENT[k].rate, 0) + 12000;
             s.spent += daily * dt;
             if (!active.length) s.idleDays += dt;
+            if(s.safety.stage==='review'){const used=Math.min(dt,s.safety.remaining);s.safety.remaining=Math.max(0,s.safety.remaining-used);s.safety.lostDays+=used;if(s.safety.remaining<1e-8){s.safety.remaining=0;s.safety.stage='ready';s.running=false;s.day+=dt;note(s,'Stand-down review complete. Release work to resume construction.');break;}}
             for (const t of [...active,...passive]) {
                 const state = s.tasks[t.id];
                 if (!state.started) { state.started = true; state.start = s.day; if (t.material) s.orders[t.material].used++; }
@@ -242,8 +265,8 @@
     }
     function report(s) {
         const duration = Math.max(1, s.day), target = site(s.site).target;
-        const score = Math.max(0, Math.round(100 - Math.max(0, duration - target) * 1.2 - Math.max(0, s.spent / s.budget - 1) * 45 - s.idleDays * .3));
-        return { score, days: Math.ceil(s.day), cost: s.spent, onTime: s.day <= target, onBudget: s.spent <= s.budget, laborHours: Math.round(s.laborHours), peakWorkers: s.peakWorkers, idleDays: s.idleDays };
+        const score = Math.max(0, Math.round(100 - Math.max(0, duration - target) * 1.2 - Math.max(0, s.spent / s.budget - 1) * 45 - s.idleDays * .3 - s.safety.incidents * 10));
+        return { score, days: Math.ceil(s.day), cost: s.spent, onTime: s.day <= target, onBudget: s.spent <= s.budget, laborHours: Math.round(s.laborHours), peakWorkers: s.peakWorkers, idleDays: s.idleDays, incidents: s.safety.incidents, standDownDays: s.safety.lostDays };
     }
     function decode(raw) {
         try {
@@ -274,10 +297,17 @@
                 if (!o || typeof o.ordered !== 'boolean' || typeof o.expedited !== 'boolean' || o.used !== used || used > MATERIALS[k].quantity || (o.ordered ? !finite(o.arrival) : o.arrival !== null || used > 0)) return null;
                 s.orders[k] = { ...o };
             }
+            if(data.safety!==undefined){
+                const v=data.safety;
+                if(!v||typeof v.controls!=='boolean'||!Number.isInteger(v.incidents)||v.incidents<0||v.incidents>100000||!finite(v.lostDays)||!finite(v.remaining)||v.remaining>.5||![null,'stopped','review','ready'].includes(v.stage))return null;
+                if(v.stage&&v.incidents===0||v.stage==='ready'&&v.remaining!==0||!v.stage&&v.remaining!==0)return null;
+                if(v.last!==null&&(!v.last||!finite(v.last.day)||v.last.day>s.day||typeof v.last.equipment!=='string'||v.last.equipment.length>80||typeof v.last.worker!=='string'||v.last.worker.length>80))return null;
+                s.safety={controls:v.controls,incidents:v.incidents,lostDays:v.lostDays,remaining:v.remaining,stage:v.stage,last:v.last?{day:v.last.day,equipment:v.last.equipment,worker:v.last.worker}:null};
+            }
             s.complete = done(s, 'handover'); s.running = false; s.speed = [1, 3, 8].includes(data.speed) ? data.speed : 1;
             s.log = Array.isArray(data.log) ? data.log.filter(e => e && finite(e.day) && e.day <= s.day + .1 && typeof e.message === 'string' && e.message.length < 400).slice(0, 30).map(e => ({ day: e.day, message: e.message })) : [];
             return s;
         } catch (_) { return null; }
     }
-    return { SITES, TRADES, EQUIPMENT, MATERIALS, PROCESS_SOURCES, workPhase, site, plan, create, done, weather, readiness, allocation, dispatch, order, expedite, capacity, inspect, advance, progress, report, decode };
+    return { SITES, TRADES, EQUIPMENT, MATERIALS, PROCESS_SOURCES, workPhase, site, plan, create, done, weather, readiness, allocation, dispatch, order, expedite, capacity, inspect, siteHolds, incident, recover, advance, progress, report, decode };
 });

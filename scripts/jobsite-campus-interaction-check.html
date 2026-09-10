@@ -1,0 +1,38 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Jobsite interaction checks</title>
+<style>body{background:#181512;color:#efe7db;font:14px system-ui;margin:20px}button{padding:10px}canvas{width:100%;height:620px}li{margin:6px}.fail{color:#ffac90}</style>
+<script type="importmap">{"imports":{"three":"/assets/vendor/three/three.module.min.js"}}</script><script src="/assets/js/jobsite-campus.js"></script>
+<h1>Construction interactions</h1><button id="run">Run interaction checks</button><p id="status">Ready</p><ol id="results"></ol><div><canvas id="scene"></canvas></div>
+<script type="module">
+import {CampusScene} from '/assets/js/jobsite-campus-scene.js';
+import {sweptDistance} from '/assets/js/jobsite-campus-spatial.mjs';
+const C=JobsiteCampus,view=new CampusScene(document.querySelector('canvas'),()=>{}),out=document.querySelector('#results'),status=document.querySelector('#status');
+function assert(name,pass){const li=document.createElement('li');li.textContent=(pass?'PASS: ':'FAIL: ')+name;li.className=pass?'pass':'fail';out.append(li);if(!pass)throw Error(name);}
+function seed(day,site='stratos'){const s=C.create(site);C.dispatch(s,'all',true);Object.keys(C.MATERIALS).forEach(k=>C.order(s,k));s.running=true;for(let i=0;i<day*10&&!s.complete;i++){C.advance(s,.1);for(const t of C.plan(site))if(t.gate)C.inspect(s,t.id);}s.running=false;return s;}
+const breathe=()=>new Promise(resolve=>requestAnimationFrame(resolve));
+async function run(){out.replaceChildren();document.querySelector('#run').disabled=true;try{
+ let s=seed(180);view.configure(s);view.cutaway=true;view.setCamera('detail');view.render(s,0);
+ const network=view.navigation,route=network.route([-58,0,5],[-16,.6,-15]);assert('Completed hall is entered through a door; every walking segment clears the physical walls and racks',route?.length>2&&route.slice(1).every((p,i)=>network.clear(route[i],p)));
+ const walker={id:999,trade:'concrete',position:[-58,0,5],target:[-58,0,5],key:'test'};s.running=true;for(let i=0;i<350;i++)view.activity.movePerson(walker,[-16,.6,-15],'walk',.1,s);assert('A worker reaches the inside of the completed hall without crossing a solid',network.free(walker.position)&&Math.hypot(walker.position[0]+16,walker.position[2]+15)<1.2);
+ s=seed(29);view.configure(s);const task=C.allocation(s).active.find(t=>t.equipment==='crane'),group=view.craneAssignment(task,s).group;
+ const start=s.tasks[task.id].progress,index=Math.floor(start*group.children.length);
+ for(const phase of [.25,.6,.9]){s.tasks[task.id].progress=(index+phase)/group.children.length;view.render(s,0);const crane=view.cranes[0];assert('Material phase '+phase+' has one physical piece and matching installed quantity',crane.carrier.g.visible&&crane.payload.visible===(phase<.88)&&group.children.filter(p=>p.visible).length===index+(phase>=.88?1:0));}
+ s=seed(7);view.configure(s);s.running=true;const active=C.allocation(s,true).active,plans=view.activity.motionPlans(s,active,.01),truck=plans.find(v=>v.name==='Haul truck 1');
+ const worker=view.activity.people.find(p=>p.position&&!p.seated);worker.position=truck.a.slice();worker.key='contact-test';const grade=s.tasks.grade.progress;
+ view.prepare(s,.01);C.advance(s,.01);assert('Guarded equipment holds production for a pedestrian in its path',s.tasks.grade.progress===grade&&s.safety.incidents===0&&s._siteHolds.grade);
+ s.safety.controls=false;view.prepare(s,.01);assert('Actual overlapping equipment and worker trigger a nongraphic stopped-work incident',s.safety.stage==='stopped'&&!s.running&&s.safety.incidents===1);
+ const tasks=JSON.stringify(s.tasks);view.activity.regroup();C.recover(s);C.advance(s,.5);view.render(s,.1);assert('Review consumes time with no construction, then requires a separate release',s.safety.stage==='ready'&&JSON.stringify(s.tasks)===tasks);C.recover(s);assert('Release restores protected traffic and preserves the incident record',s.safety.controls&&s.safety.stage===null&&C.decode(JSON.stringify(s)).safety.incidents===1);
+ for(const site of ['stratos','starbase','terafab']){
+  s=seed(0,site);s.speed=8;s.running=true;view.configure(s);let frames=0,penetrations=0,holds=0;
+  while(!s.complete&&s.day<135&&frames<2500){
+   view.prepare(s,.08);if(Object.keys(s._siteHolds||{}).length)holds++;
+   C.advance(s,.08);for(const t of C.plan(site))if(t.gate)C.inspect(s,t.id);view.render(s,.1);
+   for(const p of view.activity.people)if(p.position&&!p.seated&&!view.navigation.free(p.position))penetrations++;
+   if(++frames%40===0){status.textContent=site+' day '+s.day.toFixed(1)+' / '+Math.floor(C.progress(s)*100)+'% / '+holds+' traffic holds';await breathe();}
+  }
+  if(!s.complete){const pre=document.createElement('pre');pre.textContent=JSON.stringify({active:C.allocation(s,true).active.map(t=>({id:t.id,p:s.tasks[t.id].progress})),holds:s._siteHolds,people:view.activity.people.filter(p=>p.position&&!p.seated&&view.activity.traffic?.some(v=>sweptDistance(v.a,v.b,p.position)<v.radius+1.5)).map(p=>({id:p.id,position:p.position,target:p.target,route:p.route}))},null,2);out.append(pre);}
+  assert(site+' completes with guarded traffic, no contacts and no worker inside solid geometry (day '+s.day.toFixed(1)+', holds '+holds+')',s.complete&&s.safety.incidents===0&&penetrations===0);
+ }
+ status.textContent='PASS: all interaction checks';
+}catch(e){status.textContent='FAIL: '+e.message;}document.querySelector('#run').disabled=false;}
+document.querySelector('#run').onclick=run;
+</script></html>

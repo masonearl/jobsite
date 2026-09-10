@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { clamp, mix, smooth, cycle, earthCycle, earthHeight, earthProfile, trenchStages, trenchX, trenchDepth, foundationDepth, armAngles, parkingBay, arrivalPose, workLocation, pedestrianRoute, pathPoint, roadPoint } from './jobsite-campus-activity.mjs';
+import { PedestrianNetwork, closestPoint, sweptDistance } from './jobsite-campus-spatial.mjs';
+import { deliveryPose } from './jobsite-campus-logistics.mjs';
 const C = window.JobsiteCampus;
 const DIRT = 0x92764e, STEEL = 0x414b4e, YELLOW = 0xe5b548;
 const progress = (s, id) => s.tasks[id]?.progress || 0;
@@ -128,18 +130,87 @@ export class CampusActivity {
         let id=0;
         for(const [trade,info] of Object.entries(C.TRADES))for(let crew=0;crew<3;crew++)for(let member=0;member<info.people;member++)this.people.push({id:id++,trade,crew,member,position:null,target:null,route:null,walked:0,key:''});
     }
-    movePerson(person, target, key, dt, s) {
-        if(!person.position){person.position = s.day>1.4 || person.trade==='survey' ? target.slice() : parkingBay(person.car||0).map((v,i)=>i===0?v+1.5:v);person.target=person.position.slice();person.key='arrival';}
-        if(person.key!==key || Math.hypot(target[0]-person.target[0],target[2]-person.target[2])>5){person.route=pedestrianRoute(person.position,target);person.walked=0;person.target=target.slice();person.key=key;}
-        if(!person.route && Math.hypot(target[0]-person.position[0],target[2]-person.position[2])>.8){person.route=[person.position.slice(),target.slice()];person.walked=0;person.target=target.slice();}
-        let walking=false;
-        if(person.route && s.running){
-            const remaining=Math.hypot(...person.route[1].map((v,i)=>v-person.position[i]));const step=dt*s.speed*5.5;
-            const next=remaining<=step?person.route[1].slice():person.position.map((v,i)=>v+(person.route[1][i]-v)*step/remaining);
-            person.yaw=Math.atan2(next[0]-person.position[0],next[2]-person.position[2]);person.position=next;walking=true;
-            if(remaining<=step){person.route.shift();if(person.route.length<2)person.route=null;}
+    motionPlans(s, active, days=0) {
+        const plans=[];
+        for(const task of active){
+            const p=progress(s,task.id),next=Math.min(C.workPhase(s,task).end,p+days/task.days*(task.outdoor?C.weather(s).factor:1));
+            const add=(name,a,b,radius=2.5)=>plans.push({key:task.id+':'+name,task:task.id,name,a,b,radius});
+            if(task.id==='grade')for(let lane=0;lane<2;lane++){
+                const a=earthCycle(p,lane),b=earthCycle(next,lane);add('Haul truck '+(lane+1),a.truck,b.truck,2.5);add('Excavator '+(lane+1),a.machine,b.machine,2.4);
+            }
+            else if(task.equipment==='earth'){
+                if(task.id.endsWith('-prep')){const a=workLocation(task,p),b=workLocation(task,next);add('Foundation excavator',[a[0]+6,0,a[2]],[b[0]+6,0,b[2]],2.4);}
+                else add('Dozer',roadPoint(p),roadPoint(next),2.7);
+            }
+            if(task.reachWork){const z=task.id==='duct'?33.5:30,a=trenchStages(p),b=trenchStages(next);add('Utility excavator',[trenchX(a.dig),0,z-6],[trenchX(b.dig),0,z-6],2.4);add('Backfill backhoe',[trenchX(a.fill)-2,0,z-6],[trenchX(b.fill)-2,0,z-6],2.2);}
+            if(task.equipment==='crane'){
+                const job=this.v.craneAssignment(task,s);if(!job)continue;
+                const a=deliveryPose(p,job.group.children.length,job.base,job.target),b=deliveryPose(next,job.group.children.length,job.base,job.target);
+                add('Material carrier',a.vehicle,b.vehicle,3);
+            }
         }
-        return walking;
+        return plans;
+    }
+    prepare(s, days) {
+        if(s.safety.stage){C.siteHolds(s,{});return;}
+        const active=C.allocation(s,true).active,plans=this.motionPlans(s,active,days),holds={};this.traffic=plans;
+        const envelopes=plans.flatMap(v=>{const count=Math.max(1,Math.ceil(Math.hypot(v.b[0]-v.a[0],v.b[2]-v.a[2])/2));return Array.from({length:count+1},(_,i)=>{const x=mix(v.a[0],v.b[0],i/count),z=mix(v.a[2],v.b[2],i/count),r=v.radius+1.3;return {x0:x-r,x1:x+r,z0:z-r,z1:z+r};});});
+        this.trafficNavigation=new PedestrianNetwork([...this.v.navigation.boxes,...envelopes]);
+        for(const vehicle of plans)for(const person of this.people){
+            if(!person.position||person.crew>=s.crews[person.trade]||person.seated)continue;
+            const distance=sweptDistance(vehicle.a,vehicle.b,person.position);
+            if(s.safety.controls){if(distance<vehicle.radius+1.5)holds[vehicle.task]='Traffic hold / pedestrian crossing';}
+            else if(distance<vehicle.radius+.3){C.incident(s,vehicle.name,person.trade+' crew member');this.incidentPoint=person.position.slice();C.siteHolds(s,{});return;}
+        }
+        C.siteHolds(s,holds);
+    }
+    regroup() {
+        for(const person of this.people){person.position=null;person.route=null;person.key='';person.seated=false;}
+        this.regrouping=true;
+    }
+    movePerson(person, target, key, dt, s) {
+        const network=this.v.navigation;
+        if(!person.position){
+            const origin=this.regrouping?[-48+person.id%13*2.4,0,45+Math.floor(person.id%39/13)*2.1]:s.day>1.4||person.trade==='survey'?target:parkingBay(person.car||0).map((v,i)=>i===0?v+1.5:v);
+            person.position=network.nearest(origin)||[-48,0,46];person.target=person.position.slice();person.key='arrival';
+        }
+        // A newly placed component can occupy an old workstation. Reassign to its nearest clear service face.
+        if(!network.free(person.position)){person.position=network.nearest(person.position)||[-48,0,46];person.route=null;person.navKey=null;}
+        let routeNetwork=s.safety.controls&&this.trafficNavigation?this.trafficNavigation:network;
+        let safe=routeNetwork.nearest(target)||network.nearest(target);if(!safe)return false;
+        if(person.key!==key||person.navKey!==this.v.navigationKey||Math.hypot(safe[0]-person.target[0],safe[2]-person.target[2])>2||!person.route&&Math.hypot(safe[0]-person.position[0],safe[2]-person.position[2])>.8&&this.clock-(person.routeAttempt??-10)>.5){
+            person.routeAttempt=this.clock;
+            const waypoints=pedestrianRoute(person.position,safe),route=[person.position.slice()];
+            // Preserve the separated parking walkway, then route around the actual installed geometry.
+            const goals=person.position[2]>61?waypoints.slice(1):[safe];let reachable=true;
+            for(const goal of goals){const leg=routeNetwork.route(route.at(-1),goal);if(!leg){reachable=false;break;}route.push(...leg.slice(1));}
+            person.route=reachable&&route.length>1?route:null;person.target=safe.slice();person.key=key;person.navKey=this.v.navigationKey;
+        }
+        if(!s.running||s.safety.stage)return false;
+        if(s.safety.controls){
+            const hazards=(this.traffic||[]).filter(v=>sweptDistance(v.a,v.b,person.position)<v.radius+2);
+            if(hazards.length||!routeNetwork.free(person.position)){
+                if(!hazards.length){const exit=routeNetwork.nearest(person.position);if(exit&&network.clear(person.position,exit)){person.route=[person.position.slice(),exit];person.navKey=null;}}
+            }
+            if(hazards.length){
+                const hazard=hazards[0],near=closestPoint(hazard.a,hazard.b,person.position),dx=person.position[0]-near[0],dz=person.position[2]-near[2],angle=Math.hypot(dx,dz)>.01?Math.atan2(dz,dx):Math.atan2(hazard.b[2]-hazard.a[2],hazard.b[0]-hazard.a[0])+Math.PI/2;
+                // Leave a yielding machine's envelope before resuming the workstation route.
+                for(const offset of [0,.5,-.5,1,-1,Math.PI]){const a=angle+offset,exit=[near[0]+Math.cos(a)*(hazard.radius+4),person.position[1],near[2]+Math.sin(a)*(hazard.radius+4)];if(network.clear(person.position,exit)){person.route=[person.position.slice(),exit];person.navKey=null;break;}}
+            }
+        }
+        if(!person.route)return false;
+        const remaining=Math.hypot(...person.route[1].map((v,i)=>v-person.position[i])),step=dt*s.speed*5.5;
+        const next=remaining<=step?person.route[1].slice():person.position.map((v,i)=>v+(person.route[1][i]-v)*step/remaining);
+        if(!network.clear(person.position,next)){person.navKey=null;return false;}
+        for(const v of this.traffic||[]){
+            if(s.safety.controls&&sweptDistance(v.a,v.b,person.position,next)<v.radius+1.2&&sweptDistance(v.a,v.b,next)<=sweptDistance(v.a,v.b,person.position)+.001){
+                const detour=routeNetwork.route(person.position,safe);if(detour)person.route=detour;return false;
+            }
+            if(!s.safety.controls&&sweptDistance(v.a,v.b,person.position,next)<v.radius+.3){C.incident(s,v.name,person.trade+' crew member');this.incidentPoint=person.position.slice();return false;}
+        }
+        person.yaw=Math.atan2(next[0]-person.position[0],next[2]-person.position[2]);person.position=next;
+        if(remaining<=step){person.route.shift();if(person.route.length<2)person.route=null;}
+        return remaining>.001;
     }
     updatePeople(s,dt,active) {
         let count=0,walkingCount=0,workingCount=0,employee=0;
@@ -150,7 +221,7 @@ export class CampusActivity {
             if(!arrived)continue;
             let target=task?workLocation(task,progress(s,task.id),person.member):[-48+person.id%13*2.4,0,45+Math.floor(person.id%39/13)*2.1];
             if(task){target=[target[0]+(person.member%3-1)*1.1,target[1],target[2]+Math.floor(person.member/3)*1.1];if(task.id==='grade'){const e=this.earth[person.member%2];if(person.member<2)target=[e.machine[0]+.8,1.7,e.machine[2]-.6];else if(person.member<4)target=[e.truck[0],.2,e.truck[2]-2];}}
-            const seated=task?.id==='grade'&&person.member<4;
+            const seated=task?.id==='grade'&&person.member<4;person.seated=seated;
             if(seated){person.position=target.slice();person.target=target.slice();person.route=null;person.key=task.id;}
             const walking=seated?false:this.movePerson(person,target,task?.id||'break',dt,s);if(walking)walkingCount++;if(task)workingCount++;
             const p=person.position.slice();if(!seated&&p[1]>=0&&p[2]<40&&Math.abs(p[0])<76){p[1]=Math.max(p[1],earthHeight(p[0],p[2],progress(s,'grade')));}
@@ -161,6 +232,7 @@ export class CampusActivity {
             count++;
         }
         for(const mesh of Object.values(this.parts)){mesh.count=count;mesh.instanceMatrix.needsUpdate=true;}
+        this.regrouping=false;
         this.workerCount=count;this.walkingCount=walkingCount;this.workingCount=workingCount;
     }
     placeVehicle(model, point, ahead) {
@@ -176,6 +248,7 @@ export class CampusActivity {
     }
     update(s,dt,active) {
         if(s.running)this.clock+=dt*s.speed;
+        if(!this.traffic)this.traffic=this.motionPlans(s,active);
         this.active=active;this.terrainUpdate(s);const v=this.v;
         const earthTask=active.find(t=>t.equipment==='earth'),trenchTask=active.find(t=>t.reachWork);
         this.earth=[earthCycle(progress(s,'grade'),0),earthCycle(progress(s,'grade'),1)];
@@ -195,12 +268,13 @@ export class CampusActivity {
         const focusTask=active[this.workIndex%Math.max(1,active.length)];this.focus=focusTask?workLocation(focusTask,progress(s,focusTask.id)):[-40,0,77];
         if(focusTask?.id==='grade'){const e=this.earth[0];this.focus=e.phase>.5?e.truck.slice():[e.machine[0]+3,0,e.machine[2]+3];}
         if(focusTask&&(focusTask.equipment==='crane'||focusTask.equipment==='pump')&&['a','b'].includes(focusTask.zone)){this.focus=[(focusTask.zone==='a'?-28:30)+5,focusTask.equipment==='crane'?5:0,this.focus[2]];}
-        if(focusTask?.id==='a-frame'&&C.site(s.site).type==='space')this.focus=[-36,progress(s,'a-frame')*52,0];
+        if(focusTask?.equipment==='crane'){const job=this.v.craneAssignment(focusTask,s);if(job){const pose=deliveryPose(job.p,job.group.children.length,job.base,job.target);this.focus=pose.carried?pose.vehicle:pose.cargo;}}
         const curing=C.allocation(s).passive; if(!focusTask&&curing.length)this.focus=workLocation(curing[0],0);
         this.focusTask=focusTask;this.title=focusTask?focusTask.name:curing.length?'Concrete curing / awaiting test evidence':s.day<1.5?'Morning mobilization':'Crews at the site compound';
-        this.detail=focusTask?.id==='grade'?this.earth[0].label:trenchTask&&focusTask===trenchTask?C.workPhase(s,trenchTask).label:focusTask?.equipment==='crane'?'Rig / hoist / set / release':focusTask?.equipment==='pump'?'Place concrete / finish / release the pump':focusTask?'Assigned crews at the work front':curing.length?'Elapsed wait / foundation release still required':'Park, check in and walk to the work area';
+        this.detail=focusTask?.id==='grade'?this.earth[0].label:trenchTask&&focusTask===trenchTask?C.workPhase(s,trenchTask).label:focusTask?.equipment==='crane'?this.materialDetail(s,focusTask):focusTask?.equipment==='pump'?'Place concrete / finish / release the pump':focusTask?'Assigned crews at the work front':curing.length?'Elapsed wait / foundation release still required':'Park, check in and walk to the work area';
         v.canvas.dataset.visibleWorkers=this.workerCount;v.canvas.dataset.walkingWorkers=this.walkingCount;v.canvas.dataset.parkedCars=this.parkedCount;v.canvas.dataset.activityPhase=this.clock.toFixed(3);v.canvas.dataset.terrainVersion=this.terrainKey;
     }
+    materialDetail(s,task) { const job=this.v.craneAssignment(task,s);return job?job.c.installed+'/'+job.group.children.length+' pieces placed / '+job.c.label:'Materials at the work front'; }
     updateTrench(s,task) {
         const v=this.v,front=task||C.plan(s.site).find(t=>t.reachWork&&s.tasks[t.id].started&&progress(s,t.id)<1),p=front?progress(s,front.id):1,z=front?.id==='duct'?33.5:30,st=trenchStages(p),phase=(p*6)%1;
         const dig=trenchX(st.dig),pipe=trenchX(st.pipe),fill=trenchX(st.fill);const working=!!front,installing=!!task&&phase<.5,backfilling=!!task&&phase>=.6&&phase<.92;
